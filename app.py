@@ -3,6 +3,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 import os
 import time
 
+import arabic_reshaper
+from bidi.algorithm import get_display
+
 app = Flask(__name__)
 
 UPLOAD_FOLDER = "uploads"
@@ -31,6 +34,11 @@ def get_font(size):
             return ImageFont.truetype("DejaVuSans.ttf", size)
         except:
             return ImageFont.load_default()
+
+
+def rtl(text):
+    return get_display(arabic_reshaper.reshape(text))
+
 
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image = ImageOps.exif_transpose(Image.open(input_path)).convert("RGBA")
@@ -63,11 +71,10 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     draw = ImageDraw.Draw(image)
     font = get_font(120)
 
-    lines = [text1]
+    # ✅ תיקון עברית בלבד
+    lines = [rtl(text1)]
     if text2 and text2.strip():
-        lines.append(text2)
-
-    lines = [line[::-1] for line in lines]
+        lines.append(rtl(text2))
 
     line_sizes = [draw.textbbox((0, 0), line, font=font) for line in lines]
     line_heights = [(b[3] - b[1]) for b in line_sizes]
@@ -339,7 +346,6 @@ window.onload = function(){ addRow(); }
 </body>
 </html>
 """
-
 
 @app.route("/")
 def home():
