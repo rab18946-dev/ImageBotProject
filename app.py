@@ -4,7 +4,6 @@ import os
 import time
 
 import arabic_reshaper
-from bidi.algorithm import get_display
 
 app = Flask(__name__)
 
