@@ -15,7 +15,7 @@ LOGO_PATH = "logo.png"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# ---------- LOGO ----------
+# ---------- לוגו ----------
 def load_logo():
     try:
         return Image.open(LOGO_PATH).convert("RGBA")
@@ -24,30 +24,35 @@ def load_logo():
 
 LOGO_IMAGE = load_logo()
 
-# ---------- FONT ----------
+# ---------- פונטים ----------
 def get_font(size):
-    return ImageFont.truetype("Assistant-Bold.ttf", size)
+    try:
+        return ImageFont.truetype("Assistant-Bold.ttf", size)
+    except:
+        try:
+            return ImageFont.truetype("DejaVuSans.ttf", size)
+        except:
+            return ImageFont.load_default()
 
-# ---------- RTL FIX ----------
+# ---------- תיקון עברית יציב יותר ----------
 def rtl(text):
     if not text:
         return ""
-    reshaped = arabic_reshaper.reshape(text)
-    bidi_text = get_display(reshaped)
-    return bidi_text.replace("״", '"').replace("׳", "'")
+    try:
+        reshaped = arabic_reshaper.reshape(text)
+        return get_display(reshaped, base_dir="R")
+    except:
+        return text
 
-# ---------- IMAGE PROCESS ----------
+# ---------- עיבוד תמונה ----------
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
-
     image = ImageOps.exif_transpose(Image.open(input_path)).convert("RGBA")
     width, height = image.size
+    is_portrait = height > width
 
-    # memory protection
-    image.thumbnail((2200, 2200))
-
-    # ---------- LOGO ----------
+    # לוגו
     logo = LOGO_IMAGE.copy()
-    logo_target_width = int(width * 0.18)
+    logo_target_width = int(width * (0.15 if is_portrait else 0.18))
     w, h = logo.size
     ratio = logo_target_width / w
     logo = logo.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
@@ -65,8 +70,8 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     draw = ImageDraw.Draw(image)
 
-    # ---------- TEXT ----------
-    font = get_font(int(height * 0.055))
+    base_font_size = int(height * 0.055)
+    font = get_font(base_font_size)
 
     lines = []
     if text1:
@@ -77,81 +82,151 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     if not lines:
         out = os.path.join(OUTPUT_FOLDER, f"result_{index}.jpg")
         image.convert("RGB").save(out, "JPEG", quality=90)
-        image.close()
         return "/output/" + os.path.basename(out)
 
+    # מדידות טקסט
     line_data = []
-    max_w = 0
+    max_width = 0
 
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        line_data.append((line, w, h))
-        max_w = max(max_w, w)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        line_data.append((line, tw, th))
+        max_width = max(max_width, tw)
 
-    avg_h = sum(h for _, _, h in line_data) / len(line_data)
+    avg_h = sum(x[2] for x in line_data) / len(line_data)
     spacing = int(avg_h * 0.25)
 
-    total_h = sum(h for _, _, h in line_data) + spacing * (len(lines) - 1)
+    total_h = sum(x[2] for x in line_data) + spacing * (len(lines) - 1)
 
-    box_w = max(350, min(int(width * 0.8), max_w + 200))
-    box_h = total_h + int(avg_h)
+    # תיבת טקסט
+    box_width = max(350, min(int(width * 0.8), max_width + 180))
+    padding_y = int(avg_h * 0.5)
+    box_height = total_h + padding_y * 2
 
-    x1 = (width - box_w) // 2
+    x1 = (width - box_width) // 2
+    x2 = x1 + box_width
     y2 = height - int(height * 0.05)
-    y1 = y2 - box_h
+    y1 = y2 - box_height
 
-    # ---------- BACKGROUND BOX ----------
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
-    od.rounded_rectangle(
-        [(x1, y1), (x1 + box_w, y2)],
-        radius=30,
-        fill=(255, 255, 255, 255)
-    )
+    d = ImageDraw.Draw(overlay)
+
+    radius = int(box_height * 0.2)
+    d.rounded_rectangle([(x1, y1), (x2, y2)], radius=radius, fill=(255, 255, 255, 255))
 
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
-    # ---------- DRAW TEXT ----------
-    current_y = y1 + int(avg_h * 0.5)
-
+    y = y1 + padding_y
     for line, tw, th in line_data:
-        tx = x1 + (box_w - tw) // 2
-        draw.text((tx, current_y), line, font=font, fill=(0, 0, 0))
-        current_y += th + spacing
+        x = x1 + (box_width - tw) // 2
+        draw.text((x, y), line, fill=(0, 0, 0, 255), font=font)
+        y += th + spacing
 
-    # ---------- SAVE + CLEAN ----------
     out = os.path.join(OUTPUT_FOLDER, f"result_{index}.jpg")
     image.convert("RGB").save(out, "JPEG", quality=90)
 
-    image.close()
-    del image
-
     return "/output/" + os.path.basename(out)
 
-# ---------- API ----------
+# ---------- ממשק ----------
+HTML = """
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>ImageBot</title>
+</head>
+<body>
+<h2>מערכת עיבוד תמונות</h2>
+
+<div id="rows"></div>
+<button onclick="addRow()">הוסף שורה</button>
+<button onclick="send()">עבד</button>
+
+<script>
+function addRow(){
+    const div = document.createElement('div');
+    div.innerHTML = `
+        <input type="file" multiple>
+        <input placeholder="טקסט 1">
+        <input placeholder="טקסט 2">
+        <select>
+            <option value="bottom_right">ימין למטה</option>
+            <option value="bottom_left">שמאל למטה</option>
+            <option value="top_right">ימין למעלה</option>
+            <option value="top_left">שמאל למעלה</option>
+        </select>
+        <br><br>
+    `;
+    document.getElementById('rows').appendChild(div);
+}
+
+async function send(){
+    const rows = document.querySelectorAll('#rows > div');
+    const fd = new FormData();
+
+    rows.forEach(r=>{
+        const f = r.querySelector('input[type=file]').files;
+        const t1 = r.querySelectorAll('input')[1].value;
+        const t2 = r.querySelectorAll('input')[2].value;
+        const pos = r.querySelector('select').value;
+
+        for(let i=0;i<f.length;i++){
+            fd.append("images", f[i]);
+            fd.append("text1", t1);
+            fd.append("text2", t2);
+            fd.append("logo_position", pos);
+        }
+    });
+
+    const res = await fetch("/process",{method:"POST",body:fd});
+    const data = await res.json();
+    alert("סיום עיבוד: " + data.images.length);
+}
+</script>
+
+</body>
+</html>
+"""
+
+@app.route("/")
+def home():
+    return render_template_string(HTML)
+
+@app.route("/output/<file>")
+def output(file):
+    return send_file(os.path.join(OUTPUT_FOLDER, file))
+
 @app.route("/process", methods=["POST"])
 def process():
-
     files = request.files.getlist("images")
-    t1_list = request.form.getlist("text1")
-    t2_list = request.form.getlist("text2")
-    pos_list = request.form.getlist("logo_position")
+    t1 = request.form.getlist("text1")
+    t2 = request.form.getlist("text2")
+    pos = request.form.getlist("logo_position")
 
-    run_id = str(int(time.time() * 1000))
     results = []
+    run_id = str(int(time.time() * 1000))
 
-    for i, file in enumerate(files):
-
+    for i, f in enumerate(files):
         path = os.path.join(UPLOAD_FOLDER, f"{run_id}_{i}.jpg")
-        file.save(path)
+        f.save(path)
 
-        t1 = t1_list[i] if i < len(t1_list) else ""
-        t2 = t2_list[i] if i < len(t2_list) else ""
-        pos = pos_list[i] if i < len(pos_list) else "bottom_right"
-
-        results.append(process_image(path, t1, t2, i, pos))
+        results.append(
+            process_image(
+                path,
+                t1[i] if i < len(t1) else "",
+                t2[i] if i < len(t2) else "",
+                i,
+                pos[i] if i < len(pos) else "bottom_right"
+            )
+        )
 
     return jsonify({"images": results})
+
+# חשוב לגניקורן
+app = app
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
