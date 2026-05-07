@@ -34,7 +34,7 @@ def get_font(size):
         except:
             return ImageFont.load_default()
 
-# ---------- תיקון עברית יציב יותר ----------
+# ---------- עברית (תיקון RTL יציב יותר) ----------
 def rtl(text):
     if not text:
         return ""
@@ -53,6 +53,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     # לוגו
     logo = LOGO_IMAGE.copy()
     logo_target_width = int(width * (0.15 if is_portrait else 0.18))
+
     w, h = logo.size
     ratio = logo_target_width / w
     logo = logo.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
@@ -67,11 +68,10 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     }
 
     image.paste(logo, positions.get(logo_position, (margin, margin)), logo)
-
     draw = ImageDraw.Draw(image)
 
-    base_font_size = int(height * 0.055)
-    font = get_font(base_font_size)
+    font_size = int(height * 0.055)
+    font = get_font(font_size)
 
     lines = []
     if text1:
@@ -79,12 +79,13 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     if text2:
         lines.append(rtl(text2))
 
+    # אם אין טקסט
     if not lines:
         out = os.path.join(OUTPUT_FOLDER, f"result_{index}.jpg")
         image.convert("RGB").save(out, "JPEG", quality=90)
         return "/output/" + os.path.basename(out)
 
-    # מדידות טקסט
+    # חישוב מידות
     line_data = []
     max_width = 0
 
@@ -100,7 +101,6 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     total_h = sum(x[2] for x in line_data) + spacing * (len(lines) - 1)
 
-    # תיבת טקסט
     box_width = max(350, min(int(width * 0.8), max_width + 180))
     padding_y = int(avg_h * 0.5)
     box_height = total_h + padding_y * 2
@@ -110,15 +110,21 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     y2 = height - int(height * 0.05)
     y1 = y2 - box_height
 
+    # רקע טקסט
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
 
     radius = int(box_height * 0.2)
-    d.rounded_rectangle([(x1, y1), (x2, y2)], radius=radius, fill=(255, 255, 255, 255))
+    d.rounded_rectangle(
+        [(x1, y1), (x2, y2)],
+        radius=radius,
+        fill=(255, 255, 255, 255)
+    )
 
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
+    # ציור טקסט
     y = y1 + padding_y
     for line, tw, th in line_data:
         x = x1 + (box_width - tw) // 2
@@ -130,19 +136,19 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     return "/output/" + os.path.basename(out)
 
-# ---------- ממשק ----------
+# ---------- HTML ----------
 HTML = """
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>ImageBot</title>
+<title>מערכת עיבוד תמונות</title>
 </head>
 <body>
 <h2>מערכת עיבוד תמונות</h2>
 
 <div id="rows"></div>
-<button onclick="addRow()">הוסף שורה</button>
+<button onclick="addRow()">הוסף</button>
 <button onclick="send()">עבד</button>
 
 <script>
@@ -168,13 +174,13 @@ async function send(){
     const fd = new FormData();
 
     rows.forEach(r=>{
-        const f = r.querySelector('input[type=file]').files;
+        const files = r.querySelector('input[type=file]').files;
         const t1 = r.querySelectorAll('input')[1].value;
         const t2 = r.querySelectorAll('input')[2].value;
         const pos = r.querySelector('select').value;
 
-        for(let i=0;i<f.length;i++){
-            fd.append("images", f[i]);
+        for(let i=0;i<files.length;i++){
+            fd.append("images", files[i]);
             fd.append("text1", t1);
             fd.append("text2", t2);
             fd.append("logo_position", pos);
@@ -183,7 +189,8 @@ async function send(){
 
     const res = await fetch("/process",{method:"POST",body:fd});
     const data = await res.json();
-    alert("סיום עיבוד: " + data.images.length);
+
+    alert("סיום: " + data.images.length);
 }
 </script>
 
@@ -191,6 +198,7 @@ async function send(){
 </html>
 """
 
+# ---------- Routes ----------
 @app.route("/")
 def home():
     return render_template_string(HTML)
@@ -225,8 +233,8 @@ def process():
 
     return jsonify({"images": results})
 
-# חשוב לגניקורן
+# ---------- חשוב לRender ----------
 app = app
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=10000)
