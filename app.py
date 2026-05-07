@@ -4,6 +4,7 @@ import os
 import time
 
 import arabic_reshaper
+from bidi.algorithm import get_display
 
 app = Flask(__name__)
 
@@ -39,9 +40,8 @@ def get_font(size):
 
 def rtl(text):
     try:
-        # לתיקון עברית ב-Pillow צריך גם Reshape וגם היפוך (Visual RTL)
-        reshaped = arabic_reshaper.reshape(text)
-        return reshaped[::-1]
+        reshaped_text = arabic_reshaper.reshape(text)
+        return get_display(reshaped_text)
     except:
         return text
 
@@ -53,12 +53,12 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     # עיבוד לוגו
     logo = LOGO_IMAGE.copy()
-    logo_target_width = int(width * (0.15 if is_portrait else 0.18)) # הקטנה קלה של הלוגו שיתאים למקור
+    logo_target_width = int(width * (0.15 if is_portrait else 0.18))
     w, h = logo.size
     ratio = logo_target_width / w
     logo = logo.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
 
-    margin = int(width * 0.02) # שוליים דינמיים
+    margin = int(width * 0.02)
 
     if logo_position == "top_left":
         pos = (margin, margin)
@@ -73,18 +73,15 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     image.paste(logo, pos, logo)
 
-    # עיבוד טקסט ובאנר
     draw = ImageDraw.Draw(image)
-    
-    # חישוב גודל פונט דינמי - שלא יעלה על 6% מגובה התמונה
-    base_font_size = int(height * 0.055) 
+
+    base_font_size = int(height * 0.055)
     font = get_font(base_font_size)
 
     lines = [rtl(text1)]
     if text2 and text2.strip():
         lines.append(rtl(text2))
 
-    # חישוב מימדי הטקסט
     line_widths = []
     line_heights = []
     for line in lines:
@@ -98,20 +95,17 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     total_text_height = sum(line_heights) + (spacing * (len(lines) - 1))
 
-    # הגדרת פאדינג למלבן (קטן יותר ממה שהיה לך)
     padding_x = int(max_text_width * 0.15)
     padding_y = int(avg_line_height * 0.4)
 
     box_width = max_text_width + (padding_x * 2)
     box_height = total_text_height + (padding_y * 2)
 
-    # וידוא שהמלבן לא רחב מדי
     max_allowed_width = int(width * 0.85)
     if box_width > max_allowed_width:
         box_width = max_allowed_width
-        # כאן אפשר להוסיף לוגיקה להקטנת פונט אם הטקסט ממש ארוך
 
-    radius = int(box_height * 0.25) # פינות מעוגלות יחסיות
+    radius = int(box_height * 0.25)
     bottom_margin = int(height * 0.05)
 
     x1 = (width - box_width) // 2
@@ -119,7 +113,6 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     y2 = height - bottom_margin
     y1 = y2 - box_height
 
-    # ציור המלבן הלבן
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
     d.rounded_rectangle(
@@ -131,7 +124,6 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
-    # ציור הטקסט במרכז המלבן
     current_y = y1 + padding_y
     for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font)
@@ -288,4 +280,4 @@ def process():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0"
