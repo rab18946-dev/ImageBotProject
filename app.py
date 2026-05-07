@@ -4,6 +4,7 @@ import os
 import time
 
 import arabic_reshaper
+from bidi.algorithm import get_display
 
 app = Flask(__name__)
 
@@ -34,10 +35,11 @@ def get_font(size):
         except:
             return ImageFont.load_default()
 
-# ✅ שינוי יחיד שביקשת
+# ✅ תיקון עברית יציב
 def rtl(text):
     try:
-        return arabic_reshaper.reshape(text)
+        reshaped = arabic_reshaper.reshape(text)
+        return get_display(reshaped)
     except:
         return text
 
@@ -77,7 +79,14 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     if text2 and text2.strip():
         lines.append(rtl(text2))
 
-    line_sizes = [draw.textbbox((0, 0), line, font=font) for line in lines]
+    # ✅ תיקון גודל הפס הלבן
+    line_sizes = []
+
+    for line in lines:
+        clean_line = line.replace("״", '"').replace("׳", "'")
+        bbox = draw.textbbox((0, 0), clean_line, font=font)
+        line_sizes.append(bbox)
+
     line_heights = [(b[3] - b[1]) for b in line_sizes]
     line_widths = [(b[2] - b[0]) for b in line_sizes]
 
@@ -117,11 +126,15 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     y = bar_top + padding_y
 
     for i, line in enumerate(lines):
-        bbox = draw.textbbox((0, 0), line, font=font)
+        clean_line = line.replace("״", '"').replace("׳", "'")
+
+        bbox = draw.textbbox((0, 0), clean_line, font=font)
         tw = bbox[2] - bbox[0]
+
         x_text = (width - tw) // 2 - bbox[0]
 
         draw.text((x_text, y), line, fill=(0, 0, 0, 255), font=font)
+
         y += line_heights[i] + 20
 
     image_to_save = image.convert("RGB")
