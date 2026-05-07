@@ -35,13 +35,9 @@ def get_font(size):
         except:
             return ImageFont.load_default()
 
-# ✅ תיקון עברית יציב
+
 def rtl(text):
-    try:
-        reshaped = arabic_reshaper.reshape(text)
-        return get_display(reshaped)
-    except:
-        return text
+    return get_display(arabic_reshaper.reshape(text))
 
 
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
@@ -79,31 +75,31 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     if text2 and text2.strip():
         lines.append(rtl(text2))
 
-    # ✅ תיקון גודל הפס הלבן
-    line_sizes = []
-
-    for line in lines:
-        clean_line = line.replace("״", '"').replace("׳", "'")
-        bbox = draw.textbbox((0, 0), clean_line, font=font)
-        line_sizes.append(bbox)
-
+    line_sizes = [draw.textbbox((0, 0), line, font=font) for line in lines]
     line_heights = [(b[3] - b[1]) for b in line_sizes]
     line_widths = [(b[2] - b[0]) for b in line_sizes]
 
     max_text_width = max(line_widths)
     total_height = sum(line_heights) + (20 * (len(lines) - 1))
 
-    padding_x = 80
-    padding_y = 50
+    # ✅ תיקון רק לתמונות רוחב
+    if is_portrait:
+        padding_x = 80
+        padding_y = 50
+        bottom_margin = 80
+        max_width = int(width * 0.95)
+    else:
+        padding_x = 55
+        padding_y = 32
+        bottom_margin = 35
+        max_width = int(width * 0.72)
 
     box_width = max_text_width + padding_x * 2
-    box_height = total_height + padding_y * 2 + 40
+    box_height = total_height + padding_y * 2 + 20
 
-    max_width = int(width * 0.95)
     box_width = min(box_width, max_width)
 
     radius = 40
-    bottom_margin = 80
 
     x1 = (width - box_width) // 2
     x2 = x1 + box_width
@@ -126,22 +122,18 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     y = bar_top + padding_y
 
     for i, line in enumerate(lines):
-        clean_line = line.replace("״", '"').replace("׳", "'")
-
-        bbox = draw.textbbox((0, 0), clean_line, font=font)
+        bbox = draw.textbbox((0, 0), line, font=font)
         tw = bbox[2] - bbox[0]
-
         x_text = (width - tw) // 2 - bbox[0]
 
         draw.text((x_text, y), line, fill=(0, 0, 0, 255), font=font)
-
         y += line_heights[i] + 20
 
-    image_to_save = image.convert("RGB")
+    image_to_save, quality = compress_and_resize(image)
 
     filename = f"result_{index}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    image_to_save.save(out, "JPEG", quality=85, optimize=True)
+    image_to_save.save(out, "JPEG", quality=quality, optimize=True)
 
     return "/output/" + filename
 
@@ -402,5 +394,6 @@ def process():
 
 
 if __name__ == "__main__":
+    import os
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
