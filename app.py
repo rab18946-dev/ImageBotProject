@@ -4,7 +4,7 @@ import os
 import time
 
 import arabic_reshaper
-# הסרנו את ה-bidi שלא תמיד עובד טוב עם Pillow
+from bidi.algorithm import get_display # הוספתי חזרה את הכלי הכי חזק להיפוך
 
 app = Flask(__name__)
 
@@ -38,14 +38,16 @@ def get_font(size):
         except:
             return ImageFont.load_default()
 
+# ✅ התיקון הסופי לעברית
 def rtl(text):
     try:
         if not text:
             return ""
-        # שלב 1: חיבור אותיות (Reshape)
+        # 1. חיבור אותיות (למקרה שיש אותיות סופיות או ניקוד)
         reshaped_text = arabic_reshaper.reshape(text)
-        # שלב 2: היפוך ויזואלי עבור Pillow (Visual RTL)
-        return reshaped_text[::-1]
+        # 2. שימוש באלגוריתם Bidi כדי לסדר את כיוון הכתיבה (RTL)
+        # זה הפתרון הכי יציב לעברית ב-Pillow
+        return get_display(reshaped_text)
     except:
         return text
 
@@ -188,7 +190,6 @@ button:hover { transform: translateY(-2px); }
 select { padding: 8px; border-radius: 10px; border: 1px solid #e8d9a8; background: #fffdf7; }
 .delete-btn { background: #c62828; color: white; }
 #gallery { margin-top: 25px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; padding: 10px; }
-#gallery div { background: white; padding: 10px; border-radius: 12px; box-shadow: 0 6px 188px rgba(0,0,0,0.08); }
 #gallery div { background: white; padding: 10px; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.08); }
 #loader { margin-top: 20px; font-weight: 600; color: #7a5c00; }
 </style>
