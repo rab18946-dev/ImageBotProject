@@ -4,7 +4,7 @@ import os
 import time
 
 import arabic_reshaper
-from bidi.algorithm import get_display
+# הסרנו את ה-bidi שלא תמיד עובד טוב עם Pillow
 
 app = Flask(__name__)
 
@@ -40,8 +40,12 @@ def get_font(size):
 
 def rtl(text):
     try:
+        if not text:
+            return ""
+        # שלב 1: חיבור אותיות (Reshape)
         reshaped_text = arabic_reshaper.reshape(text)
-        return get_display(reshaped_text)
+        # שלב 2: היפוך ויזואלי עבור Pillow (Visual RTL)
+        return reshaped_text[::-1]
     except:
         return text
 
@@ -78,9 +82,16 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     base_font_size = int(height * 0.055)
     font = get_font(base_font_size)
 
-    lines = [rtl(text1)]
-    if text2 and text2.strip():
-        lines.append(rtl(text2))
+    lines = []
+    if text1: lines.append(rtl(text1))
+    if text2 and text2.strip(): lines.append(rtl(text2))
+
+    if not lines:
+        image_to_save = image.convert("RGB")
+        filename = f"result_{index}.jpg"
+        out = os.path.join(OUTPUT_FOLDER, filename)
+        image_to_save.save(out, "JPEG", quality=90, optimize=True)
+        return "/output/" + filename
 
     line_widths = []
     line_heights = []
@@ -177,6 +188,7 @@ button:hover { transform: translateY(-2px); }
 select { padding: 8px; border-radius: 10px; border: 1px solid #e8d9a8; background: #fffdf7; }
 .delete-btn { background: #c62828; color: white; }
 #gallery { margin-top: 25px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; padding: 10px; }
+#gallery div { background: white; padding: 10px; border-radius: 12px; box-shadow: 0 6px 188px rgba(0,0,0,0.08); }
 #gallery div { background: white; padding: 10px; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.08); }
 #loader { margin-top: 20px; font-weight: 600; color: #7a5c00; }
 </style>
