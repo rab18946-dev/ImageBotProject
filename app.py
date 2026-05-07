@@ -77,12 +77,21 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     if text2 and text2.strip():
         lines.append(rtl(text2))
 
-    line_sizes = [draw.textbbox((0, 0), line, font=font) for line in lines]
-    line_heights = [(b[3] - b[1]) for b in line_sizes]
-    line_widths = [(b[2] - b[0]) for b in line_sizes]
+    # =========================
+    # 🔥 תיקון מרכזי: חישוב יציב
+    # =========================
+
+    spacing = 20
+    line_height = font.size
+
+    line_widths = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_widths.append(bbox[2] - bbox[0])
 
     max_text_width = max(line_widths)
-    total_height = sum(line_heights) + (20 * (len(lines) - 1))
+
+    total_height = (len(lines) * line_height) + (spacing * (len(lines) - 1))
 
     padding_x = 80
     padding_y = 50
@@ -122,7 +131,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         x_text = (width - tw) // 2 - bbox[0]
 
         draw.text((x_text, y), line, fill=(0, 0, 0, 255), font=font)
-        y += line_heights[i] + 20
+        y += line_height + spacing
 
     image_to_save = image.convert("RGB")
 
