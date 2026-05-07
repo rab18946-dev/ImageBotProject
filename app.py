@@ -4,7 +4,7 @@ import os
 import time
 
 import arabic_reshaper
-# הסרנו את bidi כי הוא גורם להיפוך כפול במקרה שלך
+from bidi.algorithm import get_display
 
 app = Flask(__name__)
 
@@ -38,15 +38,16 @@ def get_font(size):
         except:
             return ImageFont.load_default()
 
-# ✅ תיקון העברית: מבטל את ההיפוך הכפול
+# ✅ התיקון לפי הנחיית המתכנת הבכיר
 def rtl(text):
     try:
         if not text:
             return ""
-        # שימוש ב-reshaper בלבד לחיבור אותיות (כמו ל' וא')
-        reshaped_text = arabic_reshaper.reshape(text)
-        # מחזירים את הטקסט הפוך פעם אחת בלבד עבור התצוגה ב-Pillow
-        return reshaped_text[::-1]
+        # 1. חיבור האותיות (מטפל בל"א, אותיות סופיות וכו')
+        reshaped = arabic_reshaper.reshape(text)
+        # 2. סידור כיווניות (מטפל בגרשיים, פיסוק וסדר מילים)
+        # ⚠️ הסרנו לחלוטין את [::-1] שגרם לבעיה
+        return get_display(reshaped)
     except:
         return text
 
