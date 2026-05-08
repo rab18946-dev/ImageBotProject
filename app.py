@@ -25,25 +25,25 @@ def load_logo():
 LOGO_IMAGE = load_logo()
 
 def get_font(size):
-    # עדיפות לגופן Assistant-Bold למראה עיתונאי תקני
-    fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "Arial_Bold.ttf", "DejaVuSans-Bold.ttf"]
-    for font_name in fonts_to_try:
+    # חיפוש גופן Bold למראה דומיננטי
+    fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
+    for f in fonts_to_try:
         try:
-            return ImageFont.truetype(font_name, size)
+            return ImageFont.truetype(f, size)
         except:
             continue
     return ImageFont.load_default()
 
 def rtl(text):
     try:
-        # פתרון לבעיית ה-RTL והיפוך האותיות
-        reshaped_text = arabic_reshaper.reshape(text)
-        return reshaped_text[::-1] if not any(c.isdigit() for c in text) else reshaped_text
+        return arabic_reshaper.reshape(text)
     except:
         return text
 
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
-    image = ImageOps.exif_transpose(Image.open(input_path)).convert("RGBA")
+    with Image.open(input_path) as raw_img:
+        image = ImageOps.exif_transpose(raw_img).convert("RGBA")
+    
     width, height = image.size
     is_portrait = height > width
 
@@ -55,26 +55,27 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     logo = logo.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
 
     margin = 40
-    if logo_position == "top_left": pos = (margin, margin)
-    elif logo_position == "top_right": pos = (width - logo.width - margin, margin)
-    elif logo_position == "bottom_left": pos = (margin, height - logo.height - margin)
-    elif logo_position == "bottom_right": pos = (width - logo.width - margin, height - logo.height - margin)
-    else: pos = (margin, margin)
-
+    positions = {
+        "top_left": (margin, margin),
+        "top_right": (width - logo.width - margin, margin),
+        "bottom_left": (margin, height - logo.height - margin),
+        "bottom_right": (width - logo.width - margin, height - logo.height - margin)
+    }
+    pos = positions.get(logo_position, (margin, margin))
     image.paste(logo, pos, logo)
 
-    # --- הגדרות טקסט מעודכנות לדיוק מקסימלי ---
+    # --- טקסט (Typography) ---
     draw = ImageDraw.Draw(image)
     
-    # הגדלת הגופן למראה דומיננטי
-    font_size = int(height * 0.038) 
+    # גודל גופן גדול שתופס את רוב גובה הפס הלבן
+    font_size = int(height * 0.042)  
     font = get_font(font_size)
 
     lines = []
-    if text1: lines.append(rtl(text1))
+    if text1 and text1.strip(): lines.append(rtl(text1))
     if text2 and text2.strip(): lines.append(rtl(text2))
 
-    if not lines:
+    if not lines: # אם אין טקסט, נשמור רק את הלוגו
         image_to_save = image.convert("RGB")
         filename = f"result_{index}_{int(time.time())}.jpg"
         out = os.path.join(OUTPUT_FOLDER, filename)
@@ -83,49 +84,49 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     line_data = []
     max_text_width = 0
+    ascent, descent = font.getmetrics()
+    
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        line_data.append({'line': line, 'width': w, 'height': h, 'offset_x': bbox[0], 'offset_y': bbox[1]})
-        if w > max_text_width:
-            max_text_width = w
+        line_w = bbox[2] - bbox[0]
+        line_h = ascent + descent 
+        line_data.append({'line': line, 'width': line_w, 'height': line_h, 'offset_x': bbox[0]})
+        if line_w > max_text_width:
+            max_text_width = line_w
 
-    # --- הגדרות פס לבן (הפיכת הפס לצר ומהודק) ---
+    # --- עיצוב הפס הלבן (Background Strip) ---
     line_spacing = 6
     total_text_height = sum(d['height'] for d in line_data) + (line_spacing * (len(lines) - 1))
 
-    padding_x = 35 
-    padding_y = 10  # צמצום משמעותי של הגובה המיותר
+    padding_x = 60 
+    padding_y = 10 # גובה מצומצם למראה "פס"
+    
     box_width = max_text_width + padding_x * 2
     box_height = total_text_height + padding_y * 2
 
     x1 = (width - box_width) // 2
-    y1 = height - box_height - 35 # הצמדה לתחתית התמונה
+    y1 = height - box_height - 40 # מיקום קרוב לתחתית
 
-    # --- ציור המלבן ---
+    # יצירת השכבה הלבנה
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d_overlay = ImageDraw.Draw(overlay)
-    
-    # רדיוס 8 למראה פינות מעודן (לא בלוני)
     d_overlay.rounded_rectangle(
         [x1, y1, x1 + box_width, y1 + box_height],
-        radius=8, 
+        radius=12, 
         fill=(255, 255, 255, 255)
     )
 
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
-    # מיקום הטקסט במרכז האנכי של הפס
+    # --- ציור הטקסט במרכז מושלם ---
     current_y = y1 + padding_y
     for d in line_data:
         tx = (width - d['width']) // 2
-        draw.text((tx - d['offset_x'], current_y - d['offset_y']),
+        draw.text((tx - d['offset_x'], current_y), 
                   d['line'], fill=(0, 0, 0, 255), font=font)
         current_y += d['height'] + line_spacing
 
-    # שמירה סופית
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
@@ -134,7 +135,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     return "/output/" + filename
 
 
-# ---------------- UI ----------------
+# ---------------- UI (The Design you provided) ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -143,108 +144,22 @@ HTML = """
 <title>מערכת בצילא דמהימנותא</title>
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@100..900&display=swap" rel="stylesheet">
 <style>
-body {
-    font-family: 'Heebo', Arial, sans-serif;
-    direction: rtl;
-    text-align: center;
-    margin: 0;
-    min-height: 100vh;
-    background: #f6f1e6;
-    color: #1a1a1a;
-}
-.header {
-    background: linear-gradient(135deg, #f7e7b0, #f3e6c2);
-    padding: 14px 24px;
-    border-bottom: 1px solid rgba(212,175,55,0.25);
-    box-shadow: 0 3px 10px rgba(0,0,0,0.05);
-}
-.header h2 {
-    margin: 4px 0 0;
-    font-size: 22px;
-    color: #5a4300;
-}
-button {
-    padding: 10px 16px;
-    cursor: pointer;
-    font-family: 'Heebo', sans-serif;
-    font-weight: 600;
-    border: none;
-    border-radius: 12px;
-    transition: 0.2s;
-}
+body { font-family: 'Heebo', Arial, sans-serif; direction: rtl; text-align: center; margin: 0; min-height: 100vh; background: #f6f1e6; color: #1a1a1a; }
+.header { background: linear-gradient(135deg, #f7e7b0, #f3e6c2); padding: 14px 24px; border-bottom: 1px solid rgba(212,175,55,0.25); box-shadow: 0 3px 10px rgba(0,0,0,0.05); }
+.header h2 { margin: 4px 0 0; font-size: 22px; color: #5a4300; }
+button { padding: 10px 16px; cursor: pointer; font-family: 'Heebo', sans-serif; font-weight: 600; border: none; border-radius: 12px; transition: 0.2s; }
 button:hover { transform: translateY(-2px); }
-.main-btn {
-    background: linear-gradient(135deg, #D4AF37, #f2d572, #b8962e);
-    color: white;
-    box-shadow: 0 8px 25px rgba(212,175,55,0.45);
-    margin-bottom: 20px;
-}
-.refresh-btn {
-    background: white;
-    border: 1px solid #e8d9a8;
-    color: #7a5c00;
-    margin-left: 8px;
-}
-.add-btn {
-    background: #fffdf7;
-    border: 1px solid #e8d9a8;
-    color: #7a5c00;
-    margin-top: 20px;
-}
-.row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    background: white;
-    margin: 14px auto;
-    padding: 16px;
-    width: 92%;
-    max-width: 950px;
-    border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-    border: 1px solid #f0e6c8;
-}
-.row input[type="text"] {
-    padding: 9px;
-    border: 1px solid #e8d9a8;
-    border-radius: 10px;
-    flex: 1;
-    background: #fffdf7;
-}
-select {
-    padding: 8px;
-    border-radius: 10px;
-    border: 1px solid #e8d9a8;
-    background: #fffdf7;
-}
-.delete-btn {
-    background: #c62828;
-    color: white;
-}
-#gallery {
-    margin-top: 25px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 15px;
-    padding: 20px;
-}
-#gallery div {
-    background: white;
-    padding: 12px;
-    border-radius: 12px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-    border-bottom: 3px solid #D4AF37;
-}
-#gallery img {
-    width: 100%;
-    border-radius: 8px;
-}
-#loader {
-    margin-top: 20px;
-    font-weight: 600;
-    color: #7a5c00;
-    font-size: 1.1rem;
-}
+.main-btn { background: linear-gradient(135deg, #D4AF37, #f2d572, #b8962e); color: white; box-shadow: 0 8px 25px rgba(212,175,55,0.45); margin-bottom: 20px; }
+.refresh-btn { background: white; border: 1px solid #e8d9a8; color: #7a5c00; margin-left: 8px; }
+.add-btn { background: #fffdf7; border: 1px solid #e8d9a8; color: #7a5c00; margin-top: 20px; }
+.row { display: flex; gap: 10px; align-items: center; background: white; margin: 14px auto; padding: 16px; width: 92%; max-width: 950px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); border: 1px solid #f0e6c8; }
+.row input[type="text"] { padding: 9px; border: 1px solid #e8d9a8; border-radius: 10px; flex: 1; background: #fffdf7; }
+select { padding: 8px; border-radius: 10px; border: 1px solid #e8d9a8; background: #fffdf7; }
+.delete-btn { background: #c62828; color: white; }
+#gallery { margin-top: 25px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; padding: 20px; }
+#gallery div { background: white; padding: 12px; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.08); border-bottom: 3px solid #D4AF37; }
+#gallery img { width: 100%; border-radius: 8px; }
+#loader { margin-top: 20px; font-weight: 600; color: #7a5c00; font-size: 1.1rem; }
 </style>
 </head>
 <body>
@@ -359,8 +274,6 @@ def logo():
 def serve_output(filename):
     return send_file(os.path.join(OUTPUT_FOLDER, filename))
 
-
-# ---------------- PROCESS (JOB) ----------------
 @app.route("/process", methods=["POST"])
 def process():
     files = request.files.getlist("images")
@@ -369,17 +282,10 @@ def process():
     logo_pos_list = request.form.getlist("logo_position")
 
     job_id = str(int(time.time() * 1000))
-
-    jobs[job_id] = {
-        "total": len(files),
-        "done": 0,
-        "results": []
-    }
+    jobs[job_id] = {"total": len(files), "done": 0, "results": []}
 
     for i, file in enumerate(files):
-        if file.filename == '':
-            continue
-
+        if file.filename == '': continue
         path = os.path.join(UPLOAD_FOLDER, f"{job_id}_{i}.jpg")
         file.save(path)
 
@@ -388,36 +294,24 @@ def process():
         pos = logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
 
         result = process_image(path, t1, t2, i, pos)
-
         jobs[job_id]["results"].append(result)
         jobs[job_id]["done"] += 1
-
-        try:
-            os.remove(path)
-        except:
-            pass
+        
+        try: os.remove(path)
+        except: pass
 
     return jsonify({"job_id": job_id})
 
-
-# ---------------- PROGRESS ----------------
 @app.route("/progress/<job_id>")
 def progress(job_id):
     job = jobs.get(job_id)
-
-    if not job:
-        return jsonify({"error": "not found"}), 404
-
+    if not job: return jsonify({"error": "not found"}), 404
     percent = int((job["done"] / job["total"]) * 100) if job["total"] > 0 else 0
-
     return jsonify({
-        "progress": percent,
-        "done": job["done"],
-        "total": job["total"],
+        "progress": percent, "done": job["done"], "total": job["total"],
         "finished": job["done"] == job["total"],
         "results": job["results"] if job["done"] == job["total"] else []
     })
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
