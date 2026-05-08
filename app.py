@@ -18,12 +18,6 @@ def load_logo():
 
 LOGO_IMAGE = load_logo()
 
-def compress_and_resize(image, max_size=(1280, 1280), quality=85):
-    if image.mode in ("RGBA", "P"):
-        image = image.convert("RGB")
-    image.thumbnail(max_size)
-    return image, quality
-
 def get_font(size):
     try:
         return ImageFont.truetype("Assistant-Bold.ttf", size)
@@ -44,9 +38,9 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     width, height = image.size
     is_portrait = height > width
 
-    # --- טיפול בלוגו ---
+    # --- לוגו ---
     logo = LOGO_IMAGE.copy()
-    logo_target_width = int(width * (0.2 if is_portrait else 0.25))
+    logo_target_width = int(width * (0.18 if is_portrait else 0.22))
     w, h = logo.size
     ratio = logo_target_width / w
     logo = logo.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
@@ -57,72 +51,68 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     elif logo_position == "bottom_left": pos = (margin, height - logo.height - margin)
     elif logo_position == "bottom_right": pos = (width - logo.width - margin, height - logo.height - margin)
     else: pos = (margin, margin)
-
     image.paste(logo, pos, logo)
 
-    # --- טיפול בטקסט ובתיבה (התיקון המרכזי) ---
+    # --- טקסט ותיבה (דיוק לפי מראות קודש) ---
     draw = ImageDraw.Draw(image)
     
-    # גודל פונט יחסי לגובה התמונה (עדין יותר)
-    font_size = int(height * 0.045) 
+    # פונט עדין יותר
+    font_size = int(height * 0.032)  
     font = get_font(font_size)
 
     lines = [rtl(text1)]
     if text2 and text2.strip():
         lines.append(rtl(text2))
 
-    # חישוב גודל הטקסט
+    # חישוב גודל מדויק
     line_bboxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
     line_widths = [b[2] - b[0] for b in line_bboxes]
     line_heights = [b[3] - b[1] for b in line_bboxes]
 
     max_text_width = max(line_widths)
-    total_text_height = sum(line_heights) + (15 * (len(lines) - 1))
+    total_text_height = sum(line_heights) + (8 * (len(lines) - 1))
 
-    # ריווח פנימי של התיבה (מצומצם יותר למראה נקי)
-    padding_x = 50 
-    padding_y = 20
+    # ריווחים מצומצמים ומדויקים
+    padding_x = 45 
+    padding_y = 12
 
-    # התיבה עכשיו בגודל של הטקסט בדיוק
     box_width = max_text_width + padding_x * 2
     box_height = total_text_height + padding_y * 2
 
-    # מיקום התיבה בתחתית
+    # מיקום נמוך וממורכז
     x1 = (width - box_width) // 2
-    y1 = height - box_height - 70 # מרחק מהקצה התחתון
+    y1 = height - box_height - 45 # מרחק מהתחתית
 
-    # יצירת התיבה הלבנה
+    # יצירת השכבה הלבנה
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
     d.rounded_rectangle(
         [x1, y1, x1 + box_width, y1 + box_height],
-        radius=30,
-        fill=(255, 255, 255, 255) # לבן מלא, או שנה ל-240 לשקיפות קלה
+        radius=15, # עיגול פינות עדין כפי שביקשת
+        fill=(255, 255, 255, 255)
     )
 
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
-    # כתיבת הטקסט במרכז התיבה
-    y = y1 + padding_y
+    # ציור הטקסט
+    current_y = y1 + padding_y
     for i, line in enumerate(lines):
         tw = line_widths[i]
         tx = (width - tw) // 2
-        # תיקון קטן ל-offset של הפונט
         bbox = draw.textbbox((0, 0), line, font=font)
-        draw.text((tx - bbox[0], y), line, fill=(0, 0, 0, 255), font=font)
-        y += line_heights[i] + 15
+        draw.text((tx - bbox[0], current_y), line, fill=(0, 0, 0, 255), font=font)
+        current_y += line_heights[i] + 8
 
-    # שמירה סופית
+    # שמירה
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    image_to_save.save(out, "JPEG", quality=90, optimize=True)
+    image_to_save.save(out, "JPEG", quality=95)
 
     return "/output/" + filename
 
-# --- שאר הקוד (HTML ו-Routes) נשאר זהה ---
-
+# --- שאר הקוד (HTML ו-Routes) ללא שינוי ---
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
