@@ -25,17 +25,20 @@ def load_logo():
 LOGO_IMAGE = load_logo()
 
 def get_font(size):
-    try:
-        return ImageFont.truetype("Assistant-Bold.ttf", size)
-    except:
+    # עדיפות לגופן Assistant-Bold למראה עיתונאי תקני
+    fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "Arial_Bold.ttf", "DejaVuSans-Bold.ttf"]
+    for font_name in fonts_to_try:
         try:
-            return ImageFont.truetype("DejaVuSans.ttf", size)
+            return ImageFont.truetype(font_name, size)
         except:
-            return ImageFont.load_default()
+            continue
+    return ImageFont.load_default()
 
 def rtl(text):
     try:
-        return arabic_reshaper.reshape(text)
+        # פתרון לבעיית ה-RTL והיפוך האותיות
+        reshaped_text = arabic_reshaper.reshape(text)
+        return reshaped_text[::-1] if not any(c.isdigit() for c in text) else reshaped_text
     except:
         return text
 
@@ -44,6 +47,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     width, height = image.size
     is_portrait = height > width
 
+    # --- לוגו ---
     logo = LOGO_IMAGE.copy()
     logo_target_width = int(width * (0.16 if is_portrait else 0.20))
     w, h = logo.size
@@ -59,13 +63,23 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     image.paste(logo, pos, logo)
 
+    # --- הגדרות טקסט מעודכנות לדיוק מקסימלי ---
     draw = ImageDraw.Draw(image)
-    font_size = int(height * 0.033)
+    
+    # הגדלת הגופן למראה דומיננטי
+    font_size = int(height * 0.038) 
     font = get_font(font_size)
 
-    lines = [rtl(text1)]
-    if text2 and text2.strip():
-        lines.append(rtl(text2))
+    lines = []
+    if text1: lines.append(rtl(text1))
+    if text2 and text2.strip(): lines.append(rtl(text2))
+
+    if not lines:
+        image_to_save = image.convert("RGB")
+        filename = f"result_{index}_{int(time.time())}.jpg"
+        out = os.path.join(OUTPUT_FOLDER, filename)
+        image_to_save.save(out, "JPEG", quality=95, optimize=True)
+        return "/output/" + filename
 
     line_data = []
     max_text_width = 0
@@ -77,35 +91,41 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         if w > max_text_width:
             max_text_width = w
 
-    line_spacing = 10
+    # --- הגדרות פס לבן (הפיכת הפס לצר ומהודק) ---
+    line_spacing = 6
     total_text_height = sum(d['height'] for d in line_data) + (line_spacing * (len(lines) - 1))
 
-    padding_x = 42
-    padding_y = 14
+    padding_x = 35 
+    padding_y = 10  # צמצום משמעותי של הגובה המיותר
     box_width = max_text_width + padding_x * 2
     box_height = total_text_height + padding_y * 2
 
     x1 = (width - box_width) // 2
-    y1 = height - box_height - 50
+    y1 = height - box_height - 35 # הצמדה לתחתית התמונה
 
+    # --- ציור המלבן ---
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d_overlay = ImageDraw.Draw(overlay)
+    
+    # רדיוס 8 למראה פינות מעודן (לא בלוני)
     d_overlay.rounded_rectangle(
         [x1, y1, x1 + box_width, y1 + box_height],
-        radius=18,
+        radius=8, 
         fill=(255, 255, 255, 255)
     )
 
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
-    current_y = y1 + (box_height - total_text_height) // 2
+    # מיקום הטקסט במרכז האנכי של הפס
+    current_y = y1 + padding_y
     for d in line_data:
         tx = (width - d['width']) // 2
         draw.text((tx - d['offset_x'], current_y - d['offset_y']),
                   d['line'], fill=(0, 0, 0, 255), font=font)
         current_y += d['height'] + line_spacing
 
+    # שמירה סופית
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
@@ -204,7 +224,7 @@ select {
 #gallery {
     margin-top: 25px;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     gap: 15px;
     padding: 20px;
 }
