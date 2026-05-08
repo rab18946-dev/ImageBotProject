@@ -3,8 +3,6 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 import os
 import time
 
-import arabic_reshaper
-
 app = Flask(__name__)
 
 UPLOAD_FOLDER = "uploads"
@@ -33,14 +31,6 @@ def get_font(size):
             return ImageFont.truetype("DejaVuSans.ttf", size)
         except:
             return ImageFont.load_default()
-
-# ✅ שינוי יחיד שביקשת
-def rtl(text):
-    try:
-        return arabic_reshaper.reshape(text)
-    except:
-        return text
-
 
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image = ImageOps.exif_transpose(Image.open(input_path)).convert("RGBA")
@@ -73,9 +63,11 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     draw = ImageDraw.Draw(image)
     font = get_font(120)
 
-    lines = [rtl(text1)]
+    lines = [text1]
     if text2 and text2.strip():
-        lines.append(rtl(text2))
+        lines.append(text2)
+
+    lines = [line[::-1] for line in lines]
 
     line_sizes = [draw.textbbox((0, 0), line, font=font) for line in lines]
     line_heights = [(b[3] - b[1]) for b in line_sizes]
@@ -124,11 +116,11 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         draw.text((x_text, y), line, fill=(0, 0, 0, 255), font=font)
         y += line_heights[i] + 20
 
-    image_to_save = image.convert("RGB")
+    image_to_save, quality = compress_and_resize(image)
 
     filename = f"result_{index}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    image_to_save.save(out, "JPEG", quality=85, optimize=True)
+    image_to_save.save(out, "JPEG", quality=quality, optimize=True)
 
     return "/output/" + filename
 
@@ -348,6 +340,7 @@ window.onload = function(){ addRow(); }
 </html>
 """
 
+
 @app.route("/")
 def home():
     return render_template_string(HTML)
@@ -389,5 +382,6 @@ def process():
 
 
 if __name__ == "__main__":
+    import os
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port
