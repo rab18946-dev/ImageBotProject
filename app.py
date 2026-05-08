@@ -36,7 +36,6 @@ def rtl(text):
     except:
         return text
 
-# לוגיקת עיבוד התמונה היציבה (מהקוד האחרון ששלחת) - ללא שינוי
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image = ImageOps.exif_transpose(Image.open(input_path)).convert("RGBA")
     width, height = image.size
@@ -109,149 +108,148 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     return "/output/" + filename
 
-# --- עיצוב HTML/CSS מחודש ויוקרתי ---
+# --- UI (HTML/CSS) From the second code provided ---
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>מערכת בצילא דמהימנותא</title>
-<link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@100..900&display=swap" rel="stylesheet">
 <style>
-    :root {
-        --gold: #D4AF37;
-        --dark-gold: #b8962e;
-        --bg: #fdfaf5;
-        --card-bg: #ffffff;
-    }
-    body { 
-        font-family: 'Assistant', sans-serif; 
-        direction: rtl; 
-        text-align: center; 
-        margin: 0; 
-        background-color: var(--bg); 
-        color: #333;
-    }
-    .header { 
-        background: linear-gradient(135deg, #f7e7b0, #f3e6c2); 
-        padding: 30px 20px; 
-        border-bottom: 3px solid var(--gold);
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-    }
-    .header img { max-width: 200px; margin-bottom: 10px; }
-    .header h2 { margin: 0; color: #5a4300; font-weight: 700; font-size: 28px; }
-
-    .main-container { max-width: 1000px; margin: 40px auto; padding: 0 20px; }
-    
-    .row { 
-        display: flex; 
-        flex-wrap: wrap; 
-        gap: 15px; 
-        align-items: center; 
-        background: var(--card-bg); 
-        margin-bottom: 20px; 
-        padding: 20px; 
-        border-radius: 15px; 
-        box-shadow: 0 10px 25px rgba(0,0,0,0.03);
-        border: 1px solid #efe3c1;
-    }
-    
-    input[type="file"] { flex: 1; min-width: 200px; }
-    input[type="text"] { 
-        padding: 12px; 
-        border: 1px solid #ddd; 
-        border-radius: 8px; 
-        flex: 1.5; 
-        min-width: 150px;
-        font-family: inherit;
-    }
-    select { 
-        padding: 11px; 
-        border: 1px solid #ddd; 
-        border-radius: 8px; 
-        background: white;
-        cursor: pointer;
-    }
-
-    .btn-container { margin: 30px 0; display: flex; justify-content: center; gap: 15px; }
-    
-    button { 
-        font-family: 'Assistant', sans-serif;
-        font-weight: 700;
-        cursor: pointer;
-        transition: all 0.3s;
-        border: none;
-    }
-
-    .main-btn { 
-        background: var(--gold); 
-        color: white; 
-        padding: 15px 45px; 
-        border-radius: 50px; 
-        font-size: 18px; 
-        box-shadow: 0 5px 15px rgba(212,175,55,0.3);
-    }
-    .main-btn:hover { background: var(--dark-gold); transform: translateY(-2px); }
-
-    .add-btn { 
-        background: transparent; 
-        border: 2px solid var(--gold); 
-        color: var(--gold);
-        padding: 10px 25px; 
-        border-radius: 50px;
-    }
-    .add-btn:hover { background: var(--gold); color: white; }
-
-    .delete-btn { background: #ffeded; color: #d32f2f; padding: 10px; border-radius: 8px; }
-
-    #loader { display: none; margin: 20px; font-weight: bold; color: var(--gold); font-size: 1.2rem; }
-    
-    #gallery { 
-        display: grid; 
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); 
-        gap: 20px; 
-        margin-top: 40px; 
-    }
-    .img-card { 
-        background: white; 
-        padding: 15px; 
-        border-radius: 12px; 
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        border-bottom: 3px solid var(--gold);
-    }
-    .img-card img { width: 100%; border-radius: 8px; margin-bottom: 10px; }
-    .img-card a { 
-        text-decoration: none; 
-        color: var(--dark-gold); 
-        font-weight: bold; 
-        font-size: 14px;
-        display: block;
-        margin-top: 5px;
-    }
+body {
+    font-family: 'Heebo', Arial, sans-serif;
+    direction: rtl;
+    text-align: center;
+    margin: 0;
+    min-height: 100vh;
+    background: #f6f1e6;
+    color: #1a1a1a;
+}
+.header {
+    background: linear-gradient(135deg, #f7e7b0, #f3e6c2);
+    padding: 14px 24px;
+    border-bottom: 1px solid rgba(212,175,55,0.25);
+    box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+}
+.header h2 {
+    margin: 4px 0 0;
+    font-size: 22px;
+    color: #5a4300;
+}
+button {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-family: 'Heebo', sans-serif;
+    font-weight: 600;
+    border: none;
+    border-radius: 12px;
+    transition: 0.2s;
+}
+button:hover { transform: translateY(-2px); }
+.main-btn {
+    background: linear-gradient(135deg, #D4AF37, #f2d572, #b8962e);
+    color: white;
+    box-shadow: 0 8px 25px rgba(212,175,55,0.45);
+}
+.refresh-btn {
+    background: white;
+    border: 1px solid #e8d9a8;
+    color: #7a5c00;
+    margin-left: 8px;
+}
+.add-btn {
+    background: #fffdf7;
+    border: 1px solid #e8d9a8;
+    color: #7a5c00;
+    margin-top: 20px;
+}
+.row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    background: white;
+    margin: 14px auto;
+    padding: 16px;
+    width: 92%;
+    max-width: 950px;
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    border: 1px solid #f0e6c8;
+}
+.row input[type="text"] {
+    padding: 9px;
+    border: 1px solid #e8d9a8;
+    border-radius: 10px;
+    flex: 1;
+    background: #fffdf7;
+}
+.row input[type="file"] {
+    flex: 1;
+}
+select {
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid #e8d9a8;
+    background: #fffdf7;
+}
+.delete-btn {
+    background: #c62828;
+    color: white;
+}
+#gallery {
+    margin-top: 25px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 15px;
+    padding: 20px;
+}
+#gallery div {
+    background: white;
+    padding: 12px;
+    border-radius: 12px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+    border-bottom: 3px solid #D4AF37;
+}
+#gallery img {
+    width: 100%;
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+#gallery a {
+    text-decoration: none;
+    color: #b8962e;
+    font-weight: bold;
+    font-size: 14px;
+}
+#loader {
+    margin-top: 20px;
+    font-weight: 600;
+    color: #7a5c00;
+}
 </style>
 </head>
 <body>
 
 <div class="header">
-    <img src="/logo" alt="Logo">
+    <img src="/logo" width="160">
     <h2>מערכת בצילא דמהימנותא</h2>
 </div>
 
-<div class="main-container">
-    <div class="btn-container">
-        <button class="main-btn" onclick="processAll()">עבד את כל התמונות</button>
-    </div>
-
-    <div id="rows"></div>
-    
-    <button class="add-btn" onclick="addRow()">+ הוסף שורת תמונות</button>
-
-    <div id="loader">⏳ מעבד תמונות במקצועיות, נא להמתין...</div>
-    <div id="gallery"></div>
+<div style="margin-top: 20px;">
+    <button class="main-btn" onclick="processAll()">עבד את כל התמונות</button>
+    <button class="refresh-btn" onclick="location.reload()">רענן</button>
 </div>
 
+<div id="rows"></div>
+<button class="add-btn" onclick="addRow()">+ הוסף שורת תמונות</button>
+
+<div id="loader" style="display:none;">⏳ מעבד תמונות במקצועיות, נא להמתין...</div>
+<div id="gallery"></div>
+
 <script>
+let currentRunId = null;
+
 function addRow(){
     const row = document.createElement("div");
     row.className = "row";
@@ -260,10 +258,10 @@ function addRow(){
         <input type="text" placeholder="שורה 1 (למשל: שם האירוע)">
         <input type="text" placeholder="שורה 2 (למשל: תאריך)">
         <select>
-            <option value="top_left">לוגו: שמאל למעלה</option>
-            <option value="top_right">לוגו: ימין למעלה</option>
-            <option value="bottom_left">לוגו: שמאל למטה</option>
-            <option value="bottom_right">לוגו: ימין למטה</option>
+            <option value="top_left">שמאל למעלה</option>
+            <option value="top_right">ימין למעלה</option>
+            <option value="bottom_left">שמאל למטה</option>
+            <option value="bottom_right">ימין למטה</option>
         </select>
         <button class="delete-btn" onclick="this.parentElement.remove()">🗑</button>
     `;
@@ -291,15 +289,20 @@ async function sendToServer(rows){
     if(!hasFiles) { alert("נא לבחור לפחות תמונה אחת"); return; }
 
     document.getElementById("loader").style.display = "block";
-    document.getElementById("gallery").innerHTML = "";
 
     try {
         let res = await fetch("/process", {method:"POST", body:formData});
         let data = await res.json();
         
+        const gallery = document.getElementById("gallery");
+        if(currentRunId !== data.run_id){
+            gallery.innerHTML = "";
+            currentRunId = data.run_id;
+        }
+
         data.images.forEach(img=>{
-            document.getElementById("gallery").innerHTML += `
-                <div class="img-card">
+            gallery.innerHTML += `
+                <div>
                     <img src="${img}">
                     <a href="${img}" download>⬇️ הורד תמונה</a>
                 </div>`;
@@ -314,12 +317,10 @@ async function sendToServer(rows){
 function processAll(){ sendToServer(document.querySelectorAll(".row")); }
 window.onload = addRow;
 </script>
-
 </body>
 </html>
 """
 
-# --- Flask Routes (ללא שינוי) ---
 @app.route("/")
 def home():
     return render_template_string(HTML)
