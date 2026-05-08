@@ -13,6 +13,9 @@ LOGO_PATH = "logo.png"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+# ---------------- JOB SYSTEM ----------------
+jobs = {}
+
 def load_logo():
     try:
         return Image.open(LOGO_PATH).convert("RGBA")
@@ -53,10 +56,11 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     elif logo_position == "bottom_left": pos = (margin, height - logo.height - margin)
     elif logo_position == "bottom_right": pos = (width - logo.width - margin, height - logo.height - margin)
     else: pos = (margin, margin)
+
     image.paste(logo, pos, logo)
 
     draw = ImageDraw.Draw(image)
-    font_size = int(height * 0.033)  
+    font_size = int(height * 0.033)
     font = get_font(font_size)
 
     lines = [rtl(text1)]
@@ -76,19 +80,19 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     line_spacing = 10
     total_text_height = sum(d['height'] for d in line_data) + (line_spacing * (len(lines) - 1))
 
-    padding_x = 42 
+    padding_x = 42
     padding_y = 14
     box_width = max_text_width + padding_x * 2
     box_height = total_text_height + padding_y * 2
 
     x1 = (width - box_width) // 2
-    y1 = height - box_height - 50 
+    y1 = height - box_height - 50
 
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d_overlay = ImageDraw.Draw(overlay)
     d_overlay.rounded_rectangle(
         [x1, y1, x1 + box_width, y1 + box_height],
-        radius=18, 
+        radius=18,
         fill=(255, 255, 255, 255)
     )
 
@@ -98,7 +102,8 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     current_y = y1 + (box_height - total_text_height) // 2
     for d in line_data:
         tx = (width - d['width']) // 2
-        draw.text((tx - d['offset_x'], current_y - d['offset_y']), d['line'], fill=(0, 0, 0, 255), font=font)
+        draw.text((tx - d['offset_x'], current_y - d['offset_y']),
+                  d['line'], fill=(0, 0, 0, 255), font=font)
         current_y += d['height'] + line_spacing
 
     image_to_save = image.convert("RGB")
@@ -108,7 +113,8 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     return "/output/" + filename
 
-# --- UI (HTML/CSS) From the second code provided ---
+
+# ---------------- UI ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -124,45 +130,16 @@ body {
     margin: 0;
     min-height: 100vh;
     background: #f6f1e6;
-    color: #1a1a1a;
 }
 .header {
     background: linear-gradient(135deg, #f7e7b0, #f3e6c2);
     padding: 14px 24px;
-    border-bottom: 1px solid rgba(212,175,55,0.25);
-    box-shadow: 0 3px 10px rgba(0,0,0,0.05);
-}
-.header h2 {
-    margin: 4px 0 0;
-    font-size: 22px;
-    color: #5a4300;
 }
 button {
     padding: 10px 16px;
     cursor: pointer;
-    font-family: 'Heebo', sans-serif;
-    font-weight: 600;
-    border: none;
     border-radius: 12px;
-    transition: 0.2s;
-}
-button:hover { transform: translateY(-2px); }
-.main-btn {
-    background: linear-gradient(135deg, #D4AF37, #f2d572, #b8962e);
-    color: white;
-    box-shadow: 0 8px 25px rgba(212,175,55,0.45);
-}
-.refresh-btn {
-    background: white;
-    border: 1px solid #e8d9a8;
-    color: #7a5c00;
-    margin-left: 8px;
-}
-.add-btn {
-    background: #fffdf7;
-    border: 1px solid #e8d9a8;
-    color: #7a5c00;
-    margin-top: 20px;
+    border: none;
 }
 .row {
     display: flex;
@@ -174,58 +151,19 @@ button:hover { transform: translateY(-2px); }
     width: 92%;
     max-width: 950px;
     border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-    border: 1px solid #f0e6c8;
 }
-.row input[type="text"] {
-    padding: 9px;
-    border: 1px solid #e8d9a8;
-    border-radius: 10px;
-    flex: 1;
-    background: #fffdf7;
-}
-.row input[type="file"] {
-    flex: 1;
-}
-select {
-    padding: 8px;
-    border-radius: 10px;
-    border: 1px solid #e8d9a8;
-    background: #fffdf7;
-}
-.delete-btn {
-    background: #c62828;
-    color: white;
+#loader {
+    margin-top: 20px;
+    font-weight: 600;
 }
 #gallery {
-    margin-top: 25px;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 15px;
     padding: 20px;
 }
-#gallery div {
-    background: white;
-    padding: 12px;
-    border-radius: 12px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
-    border-bottom: 3px solid #D4AF37;
-}
 #gallery img {
     width: 100%;
-    border-radius: 8px;
-    margin-bottom: 8px;
-}
-#gallery a {
-    text-decoration: none;
-    color: #b8962e;
-    font-weight: bold;
-    font-size: 14px;
-}
-#loader {
-    margin-top: 20px;
-    font-weight: 600;
-    color: #7a5c00;
 }
 </style>
 </head>
@@ -236,91 +174,90 @@ select {
     <h2>מערכת בצילא דמהימנותא</h2>
 </div>
 
-<div style="margin-top: 20px;">
-    <button class="main-btn" onclick="processAll()">עבד את כל התמונות</button>
-    <button class="refresh-btn" onclick="location.reload()">רענן</button>
-</div>
+<button onclick="processAll()">עבד את כל התמונות</button>
 
 <div id="rows"></div>
-<button class="add-btn" onclick="addRow()">+ הוסף שורת תמונות</button>
+<button onclick="addRow()">+ הוסף שורה</button>
 
-<div id="loader" style="display:none;">⏳ מעבד תמונות במקצועיות, נא להמתין...</div>
+<div id="loader"></div>
 <div id="gallery"></div>
 
 <script>
-let currentRunId = null;
-
 function addRow(){
     const row = document.createElement("div");
     row.className = "row";
     row.innerHTML = `
-        <input type="file" multiple accept="image/*">
-        <input type="text" placeholder="שורה 1 (למשל: שם האירוע)">
-        <input type="text" placeholder="שורה 2 (למשל: תאריך)">
+        <input type="file" multiple>
+        <input type="text" placeholder="שורה 1">
+        <input type="text" placeholder="שורה 2">
         <select>
             <option value="top_left">שמאל למעלה</option>
             <option value="top_right">ימין למעלה</option>
             <option value="bottom_left">שמאל למטה</option>
             <option value="bottom_right">ימין למטה</option>
         </select>
-        <button class="delete-btn" onclick="this.parentElement.remove()">🗑</button>
+        <button onclick="this.parentElement.remove()">🗑</button>
     `;
     document.getElementById("rows").appendChild(row);
 }
 
 async function sendToServer(rows){
     let formData = new FormData();
-    let hasFiles = false;
 
     rows.forEach(row=>{
         const files = row.querySelector("input[type=file]").files;
         const inputs = row.querySelectorAll("input[type=text]");
         const pos = row.querySelector("select").value;
 
-        for(let i=0; i<files.length; i++){
+        for(let i=0;i<files.length;i++){
             formData.append("images", files[i]);
             formData.append("text1", inputs[0].value);
             formData.append("text2", inputs[1].value);
             formData.append("logo_position", pos);
-            hasFiles = true;
         }
     });
 
-    if(!hasFiles) { alert("נא לבחור לפחות תמונה אחת"); return; }
+    let res = await fetch("/process", {method:"POST", body:formData});
+    let data = await res.json();
 
-    document.getElementById("loader").style.display = "block";
+    let jobId = data.job_id;
 
-    try {
-        let res = await fetch("/process", {method:"POST", body:formData});
-        let data = await res.json();
-        
-        const gallery = document.getElementById("gallery");
-        if(currentRunId !== data.run_id){
-            gallery.innerHTML = "";
-            currentRunId = data.run_id;
-        }
+    let interval = setInterval(async ()=>{
+        let r = await fetch("/progress/" + jobId);
+        let d = await r.json();
 
-        data.images.forEach(img=>{
-            gallery.innerHTML += `
+        document.getElementById("loader").innerText =
+            "מעבד... " + d.progress + "%";
+
+        if(d.finished){
+            clearInterval(interval);
+            document.getElementById("loader").innerText = "סיים";
+
+            let g = document.getElementById("gallery");
+            g.innerHTML = "";
+
+            d.results.forEach(img=>{
+                g.innerHTML += `
                 <div>
                     <img src="${img}">
-                    <a href="${img}" download>⬇️ הורד תמונה</a>
                 </div>`;
-        });
-    } catch(e) {
-        alert("שגיאה בעיבוד");
-    } finally {
-        document.getElementById("loader").style.display = "none";
-    }
+            });
+        }
+    }, 500);
 }
 
-function processAll(){ sendToServer(document.querySelectorAll(".row")); }
+function processAll(){
+    sendToServer(document.querySelectorAll(".row"));
+}
+
 window.onload = addRow;
 </script>
+
 </body>
 </html>
 """
 
+# ---------------- ROUTES ----------------
 @app.route("/")
 def home():
     return render_template_string(HTML)
@@ -333,6 +270,8 @@ def logo():
 def serve_output(filename):
     return send_file(os.path.join(OUTPUT_FOLDER, filename))
 
+
+# ---------------- PROCESS (JOB) ----------------
 @app.route("/process", methods=["POST"])
 def process():
     files = request.files.getlist("images")
@@ -340,12 +279,19 @@ def process():
     text2_list = request.form.getlist("text2")
     logo_pos_list = request.form.getlist("logo_position")
 
-    run_id = str(int(time.time() * 1000))
-    results = []
+    job_id = str(int(time.time() * 1000))
+
+    jobs[job_id] = {
+        "total": len(files),
+        "done": 0,
+        "results": []
+    }
 
     for i, file in enumerate(files):
-        if file.filename == '': continue
-        path = os.path.join(UPLOAD_FOLDER, f"{run_id}_{i}_{file.filename}")
+        if file.filename == '':
+            continue
+
+        path = os.path.join(UPLOAD_FOLDER, f"{job_id}_{i}.jpg")
         file.save(path)
 
         t1 = text1_list[i] if i < len(text1_list) else ""
@@ -353,9 +299,36 @@ def process():
         pos = logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
 
         result = process_image(path, t1, t2, i, pos)
-        results.append(result)
 
-    return jsonify({"images": results, "run_id": run_id})
+        jobs[job_id]["results"].append(result)
+        jobs[job_id]["done"] += 1
+
+        try:
+            os.remove(path)
+        except:
+            pass
+
+    return jsonify({"job_id": job_id})
+
+
+# ---------------- PROGRESS ----------------
+@app.route("/progress/<job_id>")
+def progress(job_id):
+    job = jobs.get(job_id)
+
+    if not job:
+        return jsonify({"error": "not found"}), 404
+
+    percent = int((job["done"] / job["total"]) * 100)
+
+    return jsonify({
+        "progress": percent,
+        "done": job["done"],
+        "total": job["total"],
+        "finished": job["done"] == job["total"],
+        "results": job["results"] if job["done"] == job["total"] else []
+    })
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
