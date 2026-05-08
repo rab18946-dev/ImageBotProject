@@ -1,5 +1,5 @@
 import threading
-import queue  # הוספת ספריית התור
+import queue
 from flask import Flask, request, render_template_string, send_file, jsonify
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import os
@@ -9,10 +9,10 @@ import arabic_reshaper
 app = Flask(__name__)
 
 # --- קבועי הגבלה והגדרות תור ---
-MAX_FILES = 1000 # כעת ניתן להעלות הרבה יותר בזכות התור
+MAX_FILES = 1000
 MAX_FILE_MB = 10
-MAX_TOTAL_MB = 500 # הגדלת הסף הכולל כי העיבוד מדורג
-MAX_WORKERS = 2  # רק 2 תמונות יעובדו במקביל בכל רגע נתון
+MAX_TOTAL_MB = 500
+MAX_WORKERS = 2 
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "output"
 LOGO_PATH = "logo.png"
@@ -32,7 +32,7 @@ def load_logo():
 
 LOGO_IMAGE = load_logo()
 
-# ---------------- IMAGE PROCESSING LOGIC (ללא שינוי לוגי) ----------------
+# ---------------- IMAGE PROCESSING LOGIC (ללא שינוי) ----------------
 def get_font(size):
     fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
     for f in fonts_to_try:
@@ -59,10 +59,8 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     margin = 40
     positions = {
-        "top_left": (margin, margin),
-        "top_right": (width - logo.width - margin, margin),
-        "bottom_left": (margin, height - logo.height - margin),
-        "bottom_right": (width - logo.width - margin, height - logo.height - margin)
+        "top_left": (margin, margin), "top_right": (width - logo.width - margin, margin),
+        "bottom_left": (margin, height - logo.height - margin), "bottom_right": (width - logo.width - margin, height - logo.height - margin)
     }
     pos = positions.get(logo_position, (margin, margin))
     image.paste(logo, pos, logo)
@@ -109,35 +107,32 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image_to_save.save(out, "JPEG", quality=90, optimize=True)
     return "/output/" + filename
 
-# ---------------- WORKER SYSTEM (The Fix) ----------------
+# ---------------- WORKER SYSTEM (עדכון tracking) ----------------
 def image_worker():
-    """פונקציית העובד שרצה תמיד ומחכה למשימות בתור"""
     while True:
-        # שליפת משימה מהתור (חוסם עד שיש משימה)
         task = task_queue.get()
-        if task is None: break # מנגנון עצירה במידת הצורך
+        if task is None: break
         
         job_id = task['job_id']
         path = task['path']
         
         try:
-            # הרצת העיבוד המקורי
             res_url = process_image(path, task['t1'], task['t2'], task['index'], task['pos'])
-            
-            # עדכון הסטטוס הגלובלי
             jobs[job_id]["results"].append(res_url)
             jobs[job_id]["done"] += 1
         except Exception as e:
             print(f"Worker Error: {e}")
-            jobs[job_id]["done"] += 1 # עדכון כדי שהמונה יתקדם גם בשגיאה
+            jobs[job_id]["done"] += 1
         finally:
+            # עדכון שדה ה-current בכל סיום תמונה (הצלחה או כישלון)
+            if job_id in jobs:
+                jobs[job_id]["current"] += 1
+            
             if os.path.exists(path): os.remove(path)
-            task_queue.task_done() # סימון סיום טיפול במשימה הספציפית
+            task_queue.task_done()
 
-# הפעלת ה-Workers כ-Daemon Threads בעת עליית השרת
 for _ in range(MAX_WORKERS):
-    t = threading.Thread(target=image_worker, daemon=True)
-    t.start()
+    threading.Thread(target=image_worker, daemon=True).start()
 
 # ---------------- ROUTES ----------------
 @app.route("/")
@@ -159,21 +154,18 @@ def process():
     if not files or files[0].filename == '': return jsonify({"error": "No files"}), 400
 
     job_id = str(int(time.time() * 1000))
-    jobs[job_id] = {"total": len(files), "done": 0, "results": []}
+    # אתחול ה-Job עם שדה current חדש
+    jobs[job_id] = {"total": len(files), "done": 0, "current": 0, "results": []}
 
     for i, file in enumerate(files):
         if file.filename == '': continue
         path = os.path.join(UPLOAD_FOLDER, f"q_{job_id}_{i}.jpg")
         file.save(path)
-
-        # במקום לפתוח Thread, אנחנו רק מכניסים את הנתונים לתור
         task_queue.put({
-            "job_id": job_id,
-            "path": path,
+            "job_id": job_id, "path": path, "index": i,
             "t1": text1_list[i] if i < len(text1_list) else "",
             "t2": text2_list[i] if i < len(text2_list) else "",
-            "pos": logo_pos_list[i] if i < len(logo_pos_list) else "top_left",
-            "index": i
+            "pos": logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
         })
 
     return jsonify({"job_id": job_id})
@@ -182,10 +174,17 @@ def process():
 def get_progress(job_id):
     job = jobs.get(job_id)
     if not job: return jsonify({"error": "Not found"}), 404
-    d, t = job["done"], job["total"]
-    return jsonify({"progress": int((d/t)*100), "done": d, "total": t, "finished": d==t, "results": job["results"] if d==t else []})
+    d, t, c = job["done"], job["total"], job.get("current", job["done"])
+    return jsonify({
+        "progress": int((d/t)*100), 
+        "done": d, 
+        "total": t, 
+        "current": c, # הערך החדש עבור ה-Frontend
+        "finished": d==t, 
+        "results": job["results"] if d==t else []
+    })
 
-# ---------------- UI (ללא שינוי עיצובי) ----------------
+# ---------------- UI (עם עדכון תצוגת התקדמות) ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -231,15 +230,12 @@ async function sendToServer(rows){
     let formData = new FormData();
     let hasFiles = false;
     let totalCount = 0;
-    let totalSize = 0;
-
     rows.forEach(row=>{
         const files = row.querySelector("input[type=file]").files;
         const inputs = row.querySelectorAll("input[type=text]");
         const pos = row.querySelector("select").value;
         for(let i=0; i<files.length; i++){
             totalCount++;
-            totalSize += files[i].size;
             formData.append("images", files[i]);
             formData.append("text1", inputs[0].value);
             formData.append("text2", inputs[1].value);
@@ -249,20 +245,18 @@ async function sendToServer(rows){
     });
 
     if(!hasFiles) { alert("נא לבחור לפחות תמונה אחת"); return; }
-    if(totalCount > 20 || totalSize > 50*1024*1024) {
-        if(!confirm("כמות גדולה של תמונות. העיבוד יתבצע בתור ועלול לקחת זמן. להמשיך?")) return;
-    }
-
-    document.getElementById("loader").innerText = "שולח נתונים לתור...";
+    document.getElementById("loader").innerText = "שולח נתונים...";
     let res = await fetch("/process", {method:"POST", body:formData});
     let data = await res.json();
-    if(data.error) { alert(data.error); return; }
     
     let jobId = data.job_id;
     let interval = setInterval(async ()=>{
         let r = await fetch("/progress/" + jobId);
         let d = await r.json();
-        document.getElementById("loader").innerText = "⏳ מעבד בתור (2 במקביל)... " + d.progress + "%";
+        
+        // עדכון טקסט ההתקדמות החדש לפי הדרישה
+        document.getElementById("loader").innerText = `⏳ מעבד: תמונה ${d.current} מתוך ${d.total} (${d.progress}%)`;
+        
         if(d.finished){
             clearInterval(interval);
             document.getElementById("loader").innerText = "✅ הושלם!";
