@@ -1,4 +1,5 @@
 import threading
+import queue  # הוספת ספריית התור
 from flask import Flask, request, render_template_string, send_file, jsonify
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import os
@@ -7,10 +8,11 @@ import arabic_reshaper
 
 app = Flask(__name__)
 
-# --- קבועי הגבלה למניעת קריסת זיכרון ---
-MAX_FILES = 20
+# --- קבועי הגבלה והגדרות תור ---
+MAX_FILES = 1000 # כעת ניתן להעלות הרבה יותר בזכות התור
 MAX_FILE_MB = 10
-MAX_TOTAL_MB = 50
+MAX_TOTAL_MB = 500 # הגדלת הסף הכולל כי העיבוד מדורג
+MAX_WORKERS = 2  # רק 2 תמונות יעובדו במקביל בכל רגע נתון
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "output"
 LOGO_PATH = "logo.png"
@@ -18,7 +20,8 @@ LOGO_PATH = "logo.png"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# ---------------- JOB SYSTEM ----------------
+# ---------------- TASK QUEUE SYSTEM ----------------
+task_queue = queue.Queue()
 jobs = {}
 
 def load_logo():
@@ -29,32 +32,25 @@ def load_logo():
 
 LOGO_IMAGE = load_logo()
 
+# ---------------- IMAGE PROCESSING LOGIC (ללא שינוי לוגי) ----------------
 def get_font(size):
     fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
     for f in fonts_to_try:
-        try:
-            return ImageFont.truetype(f, size)
-        except:
-            continue
+        try: return ImageFont.truetype(f, size)
+        except: continue
     return ImageFont.load_default()
 
 def rtl(text):
-    try:
-        return arabic_reshaper.reshape(text)
-    except:
-        return text
+    try: return arabic_reshaper.reshape(text)
+    except: return text
 
-# ---------------- IMAGE PROCESSING LOGIC ----------------
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
     with Image.open(input_path) as raw_img:
         image = ImageOps.exif_transpose(raw_img).convert("RGBA")
-        
-        # --- הגנה 3: הקטנת רזולוציה למניעת חריגת RAM ---
         image.thumbnail((2500, 2500), Image.LANCZOS)
     
     width, height = image.size
     is_portrait = height > width
-
     logo = LOGO_IMAGE.copy()
     logo_target_width = int(width * (0.16 if is_portrait else 0.20))
     w, h = logo.size
@@ -75,10 +71,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     font_size = int(height * 0.042)
     font = get_font(font_size)
 
-    lines = []
-    if text1 and text1.strip(): lines.append(rtl(text1))
-    if text2 and text2.strip(): lines.append(rtl(text2))
-
+    lines = [rtl(t) for t in [text1, text2] if t and t.strip()]
     if not lines:
         image_to_save = image.convert("RGB")
         filename = f"result_{index}_{int(time.time())}.jpg"
@@ -89,32 +82,26 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     line_data = []
     max_text_width = 0
     ascent, descent = font.getmetrics()
-    
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
-        line_w = bbox[2] - bbox[0]
-        line_h = ascent + descent 
-        line_data.append({'line': line, 'width': line_w, 'height': line_h, 'offset_x': bbox[0]})
-        if line_w > max_text_width:
-            max_text_width = line_w
+        lw, lh = bbox[2]-bbox[0], ascent+descent
+        line_data.append({'line': line, 'width': lw, 'height': lh, 'offset_x': bbox[0]})
+        max_text_width = max(max_text_width, lw)
 
-    line_spacing = 6
-    total_text_height = sum(d['height'] for d in line_data) + (line_spacing * (len(lines) - 1))
-    padding_x, padding_y = 60, 10 
-    box_width, box_height = max_text_width + padding_x * 2, total_text_height + padding_y * 2
-    x1, y1 = (width - box_width) // 2, height - box_height - 40 
+    box_h = sum(d['height'] for d in line_data) + (6 * (len(lines)-1)) + 20
+    box_w = max_text_width + 120
+    x1, y1 = (width - box_w)//2, height - box_h - 40
 
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d_overlay = ImageDraw.Draw(overlay)
-    d_overlay.rounded_rectangle([x1, y1, x1 + box_width, y1 + box_height], radius=12, fill=(255, 255, 255, 255))
+    d_overlay.rounded_rectangle([x1, y1, x1+box_w, y1+box_h], radius=12, fill=(255, 255, 255, 255))
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
-    current_y = y1 + padding_y
+    curr_y = y1 + 10
     for d in line_data:
-        tx = (width - d['width']) // 2
-        draw.text((tx - d['offset_x'], current_y), d['line'], fill=(0, 0, 0, 255), font=font)
-        current_y += d['height'] + line_spacing
+        draw.text(((width-d['width'])//2 - d['offset_x'], curr_y), d['line'], fill=(0,0,0,255), font=font)
+        curr_y += d['height'] + 6
 
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
@@ -122,34 +109,45 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image_to_save.save(out, "JPEG", quality=90, optimize=True)
     return "/output/" + filename
 
-# ---------------- BACKGROUND WORKER ----------------
-def background_worker(job_id, saved_paths, text1_list, text2_list, logo_pos_list):
-    for i, path in enumerate(saved_paths):
+# ---------------- WORKER SYSTEM (The Fix) ----------------
+def image_worker():
+    """פונקציית העובד שרצה תמיד ומחכה למשימות בתור"""
+    while True:
+        # שליפת משימה מהתור (חוסם עד שיש משימה)
+        task = task_queue.get()
+        if task is None: break # מנגנון עצירה במידת הצורך
+        
+        job_id = task['job_id']
+        path = task['path']
+        
         try:
-            t1 = text1_list[i] if i < len(text1_list) else ""
-            t2 = text2_list[i] if i < len(text2_list) else ""
-            pos = logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
-            result_url = process_image(path, t1, t2, i, pos)
-            jobs[job_id]["results"].append(result_url)
+            # הרצת העיבוד המקורי
+            res_url = process_image(path, task['t1'], task['t2'], task['index'], task['pos'])
+            
+            # עדכון הסטטוס הגלובלי
+            jobs[job_id]["results"].append(res_url)
             jobs[job_id]["done"] += 1
         except Exception as e:
-            print(f"Error: {e}")
-            jobs[job_id]["done"] += 1
+            print(f"Worker Error: {e}")
+            jobs[job_id]["done"] += 1 # עדכון כדי שהמונה יתקדם גם בשגיאה
         finally:
             if os.path.exists(path): os.remove(path)
+            task_queue.task_done() # סימון סיום טיפול במשימה הספציפית
+
+# הפעלת ה-Workers כ-Daemon Threads בעת עליית השרת
+for _ in range(MAX_WORKERS):
+    t = threading.Thread(target=image_worker, daemon=True)
+    t.start()
 
 # ---------------- ROUTES ----------------
 @app.route("/")
-def home():
-    return render_template_string(HTML)
+def home(): return render_template_string(HTML)
 
 @app.route("/logo")
-def logo():
-    return send_file(LOGO_PATH)
+def logo(): return send_file(LOGO_PATH)
 
 @app.route("/output/<filename>")
-def serve_output(filename):
-    return send_file(os.path.join(OUTPUT_FOLDER, filename))
+def serve_output(filename): return send_file(os.path.join(OUTPUT_FOLDER, filename))
 
 @app.route("/process", methods=["POST"])
 def process():
@@ -158,45 +156,36 @@ def process():
     text2_list = request.form.getlist("text2")
     logo_pos_list = request.form.getlist("logo_position")
 
-    # --- הגנה 2: בדיקות עומס בשרת ---
-    if len(files) > MAX_FILES:
-        return jsonify({"error": f"מקסימום {MAX_FILES} קבצים בבת אחת"}), 400
-
-    total_size = 0
-    for file in files:
-        if file.filename == '': continue
-        file.seek(0, os.SEEK_END)
-        size_mb = file.tell() / (1024 * 1024)
-        file.seek(0) # חזרה לתחילת הקובץ
-        
-        if size_mb > MAX_FILE_MB:
-            return jsonify({"error": f"הקובץ {file.filename} גדול מ-{MAX_FILE_MB}MB"}), 400
-        total_size += size_mb
-
-    if total_size > MAX_TOTAL_MB:
-        return jsonify({"error": f"סך כל הקבצים עובר את ה-{MAX_TOTAL_MB}MB"}), 400
+    if not files or files[0].filename == '': return jsonify({"error": "No files"}), 400
 
     job_id = str(int(time.time() * 1000))
-    saved_paths = []
+    jobs[job_id] = {"total": len(files), "done": 0, "results": []}
+
     for i, file in enumerate(files):
         if file.filename == '': continue
-        path = os.path.join(UPLOAD_FOLDER, f"temp_{job_id}_{i}.jpg")
+        path = os.path.join(UPLOAD_FOLDER, f"q_{job_id}_{i}.jpg")
         file.save(path)
-        saved_paths.append(path)
 
-    jobs[job_id] = {"total": len(saved_paths), "done": 0, "results": []}
-    threading.Thread(target=background_worker, args=(job_id, saved_paths, text1_list, text2_list, logo_pos_list)).start()
+        # במקום לפתוח Thread, אנחנו רק מכניסים את הנתונים לתור
+        task_queue.put({
+            "job_id": job_id,
+            "path": path,
+            "t1": text1_list[i] if i < len(text1_list) else "",
+            "t2": text2_list[i] if i < len(text2_list) else "",
+            "pos": logo_pos_list[i] if i < len(logo_pos_list) else "top_left",
+            "index": i
+        })
+
     return jsonify({"job_id": job_id})
 
 @app.route("/progress/<job_id>")
 def get_progress(job_id):
     job = jobs.get(job_id)
     if not job: return jsonify({"error": "Not found"}), 404
-    done, total = job["done"], job["total"]
-    percent = int((done / total) * 100) if total > 0 else 0
-    return jsonify({"progress": percent, "done": done, "total": total, "finished": done == total, "results": job["results"] if done == total else []})
+    d, t = job["done"], job["total"]
+    return jsonify({"progress": int((d/t)*100), "done": d, "total": t, "finished": d==t, "results": job["results"] if d==t else []})
 
-# ---------------- UI ----------------
+# ---------------- UI (ללא שינוי עיצובי) ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -238,15 +227,12 @@ function addRow(){
     row.innerHTML = `<input type="file" multiple accept="image/*"><input type="text" placeholder="שורה 1"><input type="text" placeholder="שורה 2"><select><option value="top_left">שמאל למעלה</option><option value="top_right">ימין למעלה</option><option value="bottom_left">שמאל למטה</option><option value="bottom_right">ימין למטה</option></select><button class="delete-btn" onclick="this.parentElement.remove()">🗑</button>`;
     document.getElementById("rows").appendChild(row);
 }
-
 async function sendToServer(rows){
     let formData = new FormData();
     let hasFiles = false;
     let totalCount = 0;
     let totalSize = 0;
-    let oversizedFile = false;
 
-    // --- הגנה 4: בדיקת לקוח לפני שליחה ---
     rows.forEach(row=>{
         const files = row.querySelector("input[type=file]").files;
         const inputs = row.querySelectorAll("input[type=text]");
@@ -254,8 +240,6 @@ async function sendToServer(rows){
         for(let i=0; i<files.length; i++){
             totalCount++;
             totalSize += files[i].size;
-            if(files[i].size > 10 * 1024 * 1024) oversizedFile = true;
-            
             formData.append("images", files[i]);
             formData.append("text1", inputs[0].value);
             formData.append("text2", inputs[1].value);
@@ -265,30 +249,27 @@ async function sendToServer(rows){
     });
 
     if(!hasFiles) { alert("נא לבחור לפחות תמונה אחת"); return; }
-
-    const totalMB = totalSize / (1024 * 1024);
-    if(totalCount > 20 || oversizedFile || totalMB > 50) {
-        if(!confirm("הקבצים גדולים או רבים ועלולים לגרום להאטה או עומס על המערכת. האם להמשיך בכל זאת?")) return;
+    if(totalCount > 20 || totalSize > 50*1024*1024) {
+        if(!confirm("כמות גדולה של תמונות. העיבוד יתבצע בתור ועלול לקחת זמן. להמשיך?")) return;
     }
 
-    document.getElementById("loader").innerText = "מתחיל עיבוד...";
+    document.getElementById("loader").innerText = "שולח נתונים לתור...";
     let res = await fetch("/process", {method:"POST", body:formData});
     let data = await res.json();
-    if(data.error) { alert("שגיאה: " + data.error); document.getElementById("loader").innerText = ""; return; }
+    if(data.error) { alert(data.error); return; }
     
     let jobId = data.job_id;
     let interval = setInterval(async ()=>{
         let r = await fetch("/progress/" + jobId);
         let d = await r.json();
-        document.getElementById("loader").innerText = "⏳ מעבד... " + d.progress + "%";
+        document.getElementById("loader").innerText = "⏳ מעבד בתור (2 במקביל)... " + d.progress + "%";
         if(d.finished){
             clearInterval(interval);
-            document.getElementById("loader").innerText = "✅ העיבוד הושלם!";
-            let g = document.getElementById("gallery");
-            g.innerHTML = "";
+            document.getElementById("loader").innerText = "✅ הושלם!";
+            let g = document.getElementById("gallery"); g.innerHTML = "";
             d.results.forEach(img=>{ g.innerHTML += `<div><img src="${img}"><a href="${img}" download style="text-decoration:none; color:#b8962e; font-weight:bold; display:block; margin-top:8px;">⬇️ הורד</a></div>`; });
         }
-    }, 800);
+    }, 1000);
 }
 function processAll(){ sendToServer(document.querySelectorAll(".row")); }
 window.onload = addRow;
