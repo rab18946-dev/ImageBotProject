@@ -1,3 +1,4 @@
+import threading
 from flask import Flask, request, render_template_string, send_file, jsonify
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import os
@@ -6,6 +7,7 @@ import arabic_reshaper
 
 app = Flask(__name__)
 
+# הגדרות נתיבים
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "output"
 LOGO_PATH = "logo.png"
@@ -25,7 +27,7 @@ def load_logo():
 LOGO_IMAGE = load_logo()
 
 def get_font(size):
-    # חיפוש גופן Bold למראה דומיננטי
+    # עדיפות לגופן Bold למראה דומיננטי ורשמי
     fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
     for f in fonts_to_try:
         try:
@@ -40,6 +42,7 @@ def rtl(text):
     except:
         return text
 
+# ---------------- IMAGE PROCESSING LOGIC ----------------
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
     with Image.open(input_path) as raw_img:
         image = ImageOps.exif_transpose(raw_img).convert("RGBA")
@@ -66,16 +69,14 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
 
     # --- טקסט (Typography) ---
     draw = ImageDraw.Draw(image)
-    
-    # גודל גופן גדול שתופס את רוב גובה הפס הלבן
-    font_size = int(height * 0.042)  
+    font_size = int(height * 0.042)  # גודל דומיננטי
     font = get_font(font_size)
 
     lines = []
     if text1 and text1.strip(): lines.append(rtl(text1))
     if text2 and text2.strip(): lines.append(rtl(text2))
 
-    if not lines: # אם אין טקסט, נשמור רק את הלוגו
+    if not lines:
         image_to_save = image.convert("RGB")
         filename = f"result_{index}_{int(time.time())}.jpg"
         out = os.path.join(OUTPUT_FOLDER, filename)
@@ -97,45 +98,100 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     # --- עיצוב הפס הלבן (Background Strip) ---
     line_spacing = 6
     total_text_height = sum(d['height'] for d in line_data) + (line_spacing * (len(lines) - 1))
+    padding_x, padding_y = 60, 10 
+    box_width, box_height = max_text_width + padding_x * 2, total_text_height + padding_y * 2
+    x1, y1 = (width - box_width) // 2, height - box_height - 40 
 
-    padding_x = 60 
-    padding_y = 10 # גובה מצומצם למראה "פס"
-    
-    box_width = max_text_width + padding_x * 2
-    box_height = total_text_height + padding_y * 2
-
-    x1 = (width - box_width) // 2
-    y1 = height - box_height - 40 # מיקום קרוב לתחתית
-
-    # יצירת השכבה הלבנה
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     d_overlay = ImageDraw.Draw(overlay)
-    d_overlay.rounded_rectangle(
-        [x1, y1, x1 + box_width, y1 + box_height],
-        radius=12, 
-        fill=(255, 255, 255, 255)
-    )
-
+    d_overlay.rounded_rectangle([x1, y1, x1 + box_width, y1 + box_height], radius=12, fill=(255, 255, 255, 255))
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image)
 
-    # --- ציור הטקסט במרכז מושלם ---
     current_y = y1 + padding_y
     for d in line_data:
         tx = (width - d['width']) // 2
-        draw.text((tx - d['offset_x'], current_y), 
-                  d['line'], fill=(0, 0, 0, 255), font=font)
+        draw.text((tx - d['offset_x'], current_y), d['line'], fill=(0, 0, 0, 255), font=font)
         current_y += d['height'] + line_spacing
 
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
     image_to_save.save(out, "JPEG", quality=95, optimize=True)
-
     return "/output/" + filename
 
+# ---------------- BACKGROUND WORKER ----------------
+def background_worker(job_id, saved_paths, text1_list, text2_list, logo_pos_list):
+    for i, path in enumerate(saved_paths):
+        try:
+            t1 = text1_list[i] if i < len(text1_list) else ""
+            t2 = text2_list[i] if i < len(text2_list) else ""
+            pos = logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
+            
+            result_url = process_image(path, t1, t2, i, pos)
+            
+            jobs[job_id]["results"].append(result_url)
+            jobs[job_id]["done"] += 1
+        except Exception as e:
+            print(f"Error processing {path}: {e}")
+            jobs[job_id]["done"] += 1 # עדכון מונה גם בשגיאה למניעת תקיעה
+        finally:
+            if os.path.exists(path): os.remove(path)
 
-# ---------------- UI (The Design you provided) ----------------
+# ---------------- ROUTES ----------------
+@app.route("/")
+def home():
+    return render_template_string(HTML)
+
+@app.route("/logo")
+def logo():
+    return send_file(LOGO_PATH)
+
+@app.route("/output/<filename>")
+def serve_output(filename):
+    return send_file(os.path.join(OUTPUT_FOLDER, filename))
+
+@app.route("/process", methods=["POST"])
+def process():
+    files = request.files.getlist("images")
+    text1_list = request.form.getlist("text1")
+    text2_list = request.form.getlist("text2")
+    logo_pos_list = request.form.getlist("logo_position")
+
+    if not files or files[0].filename == '':
+        return jsonify({"error": "No files"}), 400
+
+    job_id = str(int(time.time() * 1000))
+    saved_paths = []
+    
+    for i, file in enumerate(files):
+        path = os.path.join(UPLOAD_FOLDER, f"temp_{job_id}_{i}.jpg")
+        file.save(path)
+        saved_paths.append(path)
+
+    jobs[job_id] = {"total": len(files), "done": 0, "results": []}
+
+    thread = threading.Thread(target=background_worker, args=(job_id, saved_paths, text1_list, text2_list, logo_pos_list))
+    thread.start()
+
+    return jsonify({"job_id": job_id})
+
+@app.route("/progress/<job_id>")
+def get_progress(job_id):
+    job = jobs.get(job_id)
+    if not job: return jsonify({"error": "Not found"}), 404
+    
+    done = job["done"]
+    total = job["total"]
+    percent = int((done / total) * 100) if total > 0 else 0
+    finished = (done == total)
+    
+    return jsonify({
+        "progress": percent, "done": done, "total": total,
+        "finished": finished, "results": job["results"] if finished else []
+    })
+
+# ---------------- UI ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -163,20 +219,16 @@ select { padding: 8px; border-radius: 10px; border: 1px solid #e8d9a8; backgroun
 </style>
 </head>
 <body>
-
 <div class="header">
     <img src="/logo" width="160">
     <h2>מערכת בצילא דמהימנותא</h2>
 </div>
-
 <div style="margin-top: 25px;">
     <button class="main-btn" onclick="processAll()">עבד את כל התמונות</button>
     <button class="refresh-btn" onclick="location.reload()">רענן</button>
 </div>
-
 <div id="rows"></div>
 <button class="add-btn" onclick="addRow()">+ הוסף שורה</button>
-
 <div id="loader"></div>
 <div id="gallery"></div>
 
@@ -202,12 +254,10 @@ function addRow(){
 async function sendToServer(rows){
     let formData = new FormData();
     let hasFiles = false;
-
     rows.forEach(row=>{
         const files = row.querySelector("input[type=file]").files;
         const inputs = row.querySelectorAll("input[type=text]");
         const pos = row.querySelector("select").value;
-
         for(let i=0;i<files.length;i++){
             formData.append("images", files[i]);
             formData.append("text1", inputs[0].value);
@@ -216,102 +266,32 @@ async function sendToServer(rows){
             hasFiles = true;
         }
     });
-
     if(!hasFiles) { alert("נא לבחור לפחות תמונה אחת"); return; }
-
     document.getElementById("loader").innerText = "מתחיל עיבוד...";
-    document.getElementById("gallery").innerHTML = "";
-
     let res = await fetch("/process", {method:"POST", body:formData});
     let data = await res.json();
     let jobId = data.job_id;
-
     let interval = setInterval(async ()=>{
         let r = await fetch("/progress/" + jobId);
         let d = await r.json();
-
-        document.getElementById("loader").innerText = "⏳ מעבד במקצועיות... " + d.progress + "%";
-
+        document.getElementById("loader").innerText = "⏳ מעבד... " + d.progress + "%";
         if(d.finished){
             clearInterval(interval);
             document.getElementById("loader").innerText = "✅ העיבוד הושלם!";
-
             let g = document.getElementById("gallery");
             g.innerHTML = "";
-
             d.results.forEach(img=>{
-                g.innerHTML += `
-                <div>
-                    <img src="${img}">
-                    <a href="${img}" download style="text-decoration:none; color:#b8962e; font-weight:bold; display:block; margin-top:8px;">⬇️ הורד תמונה</a>
-                </div>`;
+                g.innerHTML += `<div><img src="${img}"><a href="${img}" download style="text-decoration:none; color:#b8962e; font-weight:bold; display:block; margin-top:8px;">⬇️ הורד</a></div>`;
             });
         }
     }, 800);
 }
-
-function processAll(){
-    sendToServer(document.querySelectorAll(".row"));
-}
-
+function processAll(){ sendToServer(document.querySelectorAll(".row")); }
 window.onload = addRow;
 </script>
-
 </body>
 </html>
 """
-
-# ---------------- ROUTES ----------------
-@app.route("/")
-def home():
-    return render_template_string(HTML)
-
-@app.route("/logo")
-def logo():
-    return send_file(LOGO_PATH)
-
-@app.route("/output/<filename>")
-def serve_output(filename):
-    return send_file(os.path.join(OUTPUT_FOLDER, filename))
-
-@app.route("/process", methods=["POST"])
-def process():
-    files = request.files.getlist("images")
-    text1_list = request.form.getlist("text1")
-    text2_list = request.form.getlist("text2")
-    logo_pos_list = request.form.getlist("logo_position")
-
-    job_id = str(int(time.time() * 1000))
-    jobs[job_id] = {"total": len(files), "done": 0, "results": []}
-
-    for i, file in enumerate(files):
-        if file.filename == '': continue
-        path = os.path.join(UPLOAD_FOLDER, f"{job_id}_{i}.jpg")
-        file.save(path)
-
-        t1 = text1_list[i] if i < len(text1_list) else ""
-        t2 = text2_list[i] if i < len(text2_list) else ""
-        pos = logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
-
-        result = process_image(path, t1, t2, i, pos)
-        jobs[job_id]["results"].append(result)
-        jobs[job_id]["done"] += 1
-        
-        try: os.remove(path)
-        except: pass
-
-    return jsonify({"job_id": job_id})
-
-@app.route("/progress/<job_id>")
-def progress(job_id):
-    job = jobs.get(job_id)
-    if not job: return jsonify({"error": "not found"}), 404
-    percent = int((job["done"] / job["total"]) * 100) if job["total"] > 0 else 0
-    return jsonify({
-        "progress": percent, "done": job["done"], "total": job["total"],
-        "finished": job["done"] == job["total"],
-        "results": job["results"] if job["done"] == job["total"] else []
-    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
