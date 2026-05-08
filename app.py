@@ -7,7 +7,10 @@ import arabic_reshaper
 
 app = Flask(__name__)
 
-# הגדרות נתיבים
+# --- קבועי הגבלה למניעת קריסת זיכרון ---
+MAX_FILES = 20
+MAX_FILE_MB = 10
+MAX_TOTAL_MB = 50
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "output"
 LOGO_PATH = "logo.png"
@@ -27,7 +30,6 @@ def load_logo():
 LOGO_IMAGE = load_logo()
 
 def get_font(size):
-    # עדיפות לגופן Bold למראה דומיננטי ורשמי
     fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
     for f in fonts_to_try:
         try:
@@ -46,11 +48,13 @@ def rtl(text):
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
     with Image.open(input_path) as raw_img:
         image = ImageOps.exif_transpose(raw_img).convert("RGBA")
+        
+        # --- הגנה 3: הקטנת רזולוציה למניעת חריגת RAM ---
+        image.thumbnail((2500, 2500), Image.LANCZOS)
     
     width, height = image.size
     is_portrait = height > width
 
-    # --- לוגו ---
     logo = LOGO_IMAGE.copy()
     logo_target_width = int(width * (0.16 if is_portrait else 0.20))
     w, h = logo.size
@@ -67,9 +71,8 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     pos = positions.get(logo_position, (margin, margin))
     image.paste(logo, pos, logo)
 
-    # --- טקסט (Typography) ---
     draw = ImageDraw.Draw(image)
-    font_size = int(height * 0.042)  # גודל דומיננטי
+    font_size = int(height * 0.042)
     font = get_font(font_size)
 
     lines = []
@@ -80,7 +83,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         image_to_save = image.convert("RGB")
         filename = f"result_{index}_{int(time.time())}.jpg"
         out = os.path.join(OUTPUT_FOLDER, filename)
-        image_to_save.save(out, "JPEG", quality=95, optimize=True)
+        image_to_save.save(out, "JPEG", quality=90, optimize=True)
         return "/output/" + filename
 
     line_data = []
@@ -95,7 +98,6 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         if line_w > max_text_width:
             max_text_width = line_w
 
-    # --- עיצוב הפס הלבן (Background Strip) ---
     line_spacing = 6
     total_text_height = sum(d['height'] for d in line_data) + (line_spacing * (len(lines) - 1))
     padding_x, padding_y = 60, 10 
@@ -117,7 +119,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    image_to_save.save(out, "JPEG", quality=95, optimize=True)
+    image_to_save.save(out, "JPEG", quality=90, optimize=True)
     return "/output/" + filename
 
 # ---------------- BACKGROUND WORKER ----------------
@@ -127,14 +129,12 @@ def background_worker(job_id, saved_paths, text1_list, text2_list, logo_pos_list
             t1 = text1_list[i] if i < len(text1_list) else ""
             t2 = text2_list[i] if i < len(text2_list) else ""
             pos = logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
-            
             result_url = process_image(path, t1, t2, i, pos)
-            
             jobs[job_id]["results"].append(result_url)
             jobs[job_id]["done"] += 1
         except Exception as e:
-            print(f"Error processing {path}: {e}")
-            jobs[job_id]["done"] += 1 # עדכון מונה גם בשגיאה למניעת תקיעה
+            print(f"Error: {e}")
+            jobs[job_id]["done"] += 1
         finally:
             if os.path.exists(path): os.remove(path)
 
@@ -158,38 +158,43 @@ def process():
     text2_list = request.form.getlist("text2")
     logo_pos_list = request.form.getlist("logo_position")
 
-    if not files or files[0].filename == '':
-        return jsonify({"error": "No files"}), 400
+    # --- הגנה 2: בדיקות עומס בשרת ---
+    if len(files) > MAX_FILES:
+        return jsonify({"error": f"מקסימום {MAX_FILES} קבצים בבת אחת"}), 400
+
+    total_size = 0
+    for file in files:
+        if file.filename == '': continue
+        file.seek(0, os.SEEK_END)
+        size_mb = file.tell() / (1024 * 1024)
+        file.seek(0) # חזרה לתחילת הקובץ
+        
+        if size_mb > MAX_FILE_MB:
+            return jsonify({"error": f"הקובץ {file.filename} גדול מ-{MAX_FILE_MB}MB"}), 400
+        total_size += size_mb
+
+    if total_size > MAX_TOTAL_MB:
+        return jsonify({"error": f"סך כל הקבצים עובר את ה-{MAX_TOTAL_MB}MB"}), 400
 
     job_id = str(int(time.time() * 1000))
     saved_paths = []
-    
     for i, file in enumerate(files):
+        if file.filename == '': continue
         path = os.path.join(UPLOAD_FOLDER, f"temp_{job_id}_{i}.jpg")
         file.save(path)
         saved_paths.append(path)
 
-    jobs[job_id] = {"total": len(files), "done": 0, "results": []}
-
-    thread = threading.Thread(target=background_worker, args=(job_id, saved_paths, text1_list, text2_list, logo_pos_list))
-    thread.start()
-
+    jobs[job_id] = {"total": len(saved_paths), "done": 0, "results": []}
+    threading.Thread(target=background_worker, args=(job_id, saved_paths, text1_list, text2_list, logo_pos_list)).start()
     return jsonify({"job_id": job_id})
 
 @app.route("/progress/<job_id>")
 def get_progress(job_id):
     job = jobs.get(job_id)
     if not job: return jsonify({"error": "Not found"}), 404
-    
-    done = job["done"]
-    total = job["total"]
+    done, total = job["done"], job["total"]
     percent = int((done / total) * 100) if total > 0 else 0
-    finished = (done == total)
-    
-    return jsonify({
-        "progress": percent, "done": done, "total": total,
-        "finished": finished, "results": job["results"] if finished else []
-    })
+    return jsonify({"progress": percent, "done": done, "total": total, "finished": done == total, "results": job["results"] if done == total else []})
 
 # ---------------- UI ----------------
 HTML = """
@@ -219,14 +224,8 @@ select { padding: 8px; border-radius: 10px; border: 1px solid #e8d9a8; backgroun
 </style>
 </head>
 <body>
-<div class="header">
-    <img src="/logo" width="160">
-    <h2>מערכת בצילא דמהימנותא</h2>
-</div>
-<div style="margin-top: 25px;">
-    <button class="main-btn" onclick="processAll()">עבד את כל התמונות</button>
-    <button class="refresh-btn" onclick="location.reload()">רענן</button>
-</div>
+<div class="header"><img src="/logo" width="160"><h2>מערכת בצילא דמהימנותא</h2></div>
+<div style="margin-top: 25px;"><button class="main-btn" onclick="processAll()">עבד את כל התמונות</button><button class="refresh-btn" onclick="location.reload()">רענן</button></div>
 <div id="rows"></div>
 <button class="add-btn" onclick="addRow()">+ הוסף שורה</button>
 <div id="loader"></div>
@@ -236,29 +235,27 @@ select { padding: 8px; border-radius: 10px; border: 1px solid #e8d9a8; backgroun
 function addRow(){
     const row = document.createElement("div");
     row.className = "row";
-    row.innerHTML = `
-        <input type="file" multiple accept="image/*">
-        <input type="text" placeholder="שורה 1">
-        <input type="text" placeholder="שורה 2">
-        <select>
-            <option value="top_left">שמאל למעלה</option>
-            <option value="top_right">ימין למעלה</option>
-            <option value="bottom_left">שמאל למטה</option>
-            <option value="bottom_right">ימין למטה</option>
-        </select>
-        <button class="delete-btn" onclick="this.parentElement.remove()">🗑</button>
-    `;
+    row.innerHTML = `<input type="file" multiple accept="image/*"><input type="text" placeholder="שורה 1"><input type="text" placeholder="שורה 2"><select><option value="top_left">שמאל למעלה</option><option value="top_right">ימין למעלה</option><option value="bottom_left">שמאל למטה</option><option value="bottom_right">ימין למטה</option></select><button class="delete-btn" onclick="this.parentElement.remove()">🗑</button>`;
     document.getElementById("rows").appendChild(row);
 }
 
 async function sendToServer(rows){
     let formData = new FormData();
     let hasFiles = false;
+    let totalCount = 0;
+    let totalSize = 0;
+    let oversizedFile = false;
+
+    // --- הגנה 4: בדיקת לקוח לפני שליחה ---
     rows.forEach(row=>{
         const files = row.querySelector("input[type=file]").files;
         const inputs = row.querySelectorAll("input[type=text]");
         const pos = row.querySelector("select").value;
-        for(let i=0;i<files.length;i++){
+        for(let i=0; i<files.length; i++){
+            totalCount++;
+            totalSize += files[i].size;
+            if(files[i].size > 10 * 1024 * 1024) oversizedFile = true;
+            
             formData.append("images", files[i]);
             formData.append("text1", inputs[0].value);
             formData.append("text2", inputs[1].value);
@@ -266,10 +263,19 @@ async function sendToServer(rows){
             hasFiles = true;
         }
     });
+
     if(!hasFiles) { alert("נא לבחור לפחות תמונה אחת"); return; }
+
+    const totalMB = totalSize / (1024 * 1024);
+    if(totalCount > 20 || oversizedFile || totalMB > 50) {
+        if(!confirm("הקבצים גדולים או רבים ועלולים לגרום להאטה או עומס על המערכת. האם להמשיך בכל זאת?")) return;
+    }
+
     document.getElementById("loader").innerText = "מתחיל עיבוד...";
     let res = await fetch("/process", {method:"POST", body:formData});
     let data = await res.json();
+    if(data.error) { alert("שגיאה: " + data.error); document.getElementById("loader").innerText = ""; return; }
+    
     let jobId = data.job_id;
     let interval = setInterval(async ()=>{
         let r = await fetch("/progress/" + jobId);
@@ -280,9 +286,7 @@ async function sendToServer(rows){
             document.getElementById("loader").innerText = "✅ העיבוד הושלם!";
             let g = document.getElementById("gallery");
             g.innerHTML = "";
-            d.results.forEach(img=>{
-                g.innerHTML += `<div><img src="${img}"><a href="${img}" download style="text-decoration:none; color:#b8962e; font-weight:bold; display:block; margin-top:8px;">⬇️ הורד</a></div>`;
-            });
+            d.results.forEach(img=>{ g.innerHTML += `<div><img src="${img}"><a href="${img}" download style="text-decoration:none; color:#b8962e; font-weight:bold; display:block; margin-top:8px;">⬇️ הורד</a></div>`; });
         }
     }, 800);
 }
