@@ -2,7 +2,7 @@ import threading
 import queue
 import os
 import time
-import gc # הוספת ניקוי זיכרון ידני
+import gc
 from flask import Flask, request, render_template_string, send_file, jsonify
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import arabic_reshaper
@@ -31,7 +31,7 @@ def load_logo():
 
 LOGO_IMAGE = load_logo()
 
-# ---------------- IMAGE PROCESSING LOGIC (FIXED) ----------------
+# ---------------- IMAGE PROCESSING LOGIC ----------------
 def get_font(size):
     fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
     for f in fonts_to_try:
@@ -44,13 +44,11 @@ def rtl(text):
     except: return text
 
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
-    print(f"START processing: {input_path}") # לוג התחלה
-    
-    # טעינה מלאה לזיכרון והקטנה ל-1500px
+    print(f"START processing: {input_path}")
     with Image.open(input_path) as raw_img:
-        raw_img.load() # טעינה מלאה כפי שנדרש
+        raw_img.load()
         image = ImageOps.exif_transpose(raw_img).convert("RGBA")
-        image.thumbnail((1500, 1500), Image.LANCZOS) # הקטנה למניעת קריסה
+        image.thumbnail((1500, 1500), Image.LANCZOS)
     
     width, height = image.size
     is_portrait = height > width
@@ -67,7 +65,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     }
     pos = positions.get(logo_position, (margin, margin))
     image.paste(logo, pos, logo)
-    logo.close() # שחרור זיכרון לוגו זמני
+    logo.close()
 
     draw = ImageDraw.Draw(image)
     font_size = int(height * 0.042)
@@ -88,12 +86,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         box_w = max_text_width + 120
         x1, y1 = (width - box_w)//2, height - box_h - 40
 
-        # החלפת מנגנון ה-overlay במנגנון ה-rounded_rectangle הישיר
-        draw.rounded_rectangle(
-            [x1, y1, x1+box_w, y1+box_h],
-            radius=12,
-            fill=(255, 255, 255)
-        )
+        draw.rounded_rectangle([x1, y1, x1+box_w, y1+box_h], radius=12, fill=(255, 255, 255))
 
         curr_y = y1 + 10
         for d in line_data:
@@ -103,20 +96,15 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    
-    # שמירה ללא optimize ובאיכות 80
     image_to_save.save(out, "JPEG", quality=80) 
     
-    # שחרור זיכרון אגרסיבי
     image.close()
     image_to_save.close()
-    
-    print(f"DONE processing: {input_path}") # לוג סיום
+    print(f"DONE processing: {input_path}")
     return "/output/" + filename
 
-# ---------------- WORKER SYSTEM ----------------
+# ---------------- WORKER SYSTEM (WITH ACTIVE TRACKING) ----------------
 def image_worker(worker_id):
-    print(f"[Worker {worker_id}] Online")
     while True:
         task = task_queue.get()
         if task is None: break
@@ -125,7 +113,12 @@ def image_worker(worker_id):
         path = task['path']
         
         try:
+            # עדכון שה-Worker התחיל לעבוד על המשימה
+            if job_id in jobs:
+                jobs[job_id]["active"] += 1
+            
             res_url = process_image(path, task['t1'], task['t2'], task['index'], task['pos'])
+            
             if job_id in jobs:
                 jobs[job_id]["results"].append(res_url)
                 jobs[job_id]["done"] += 1
@@ -136,11 +129,14 @@ def image_worker(worker_id):
                 jobs[job_id]["done"] += 1
                 jobs[job_id]["current"] += 1
         finally:
+            # הפחתת המונה האקטיבי בסיום (הצלחה או כישלון)
+            if job_id in jobs and jobs[job_id]["active"] > 0:
+                jobs[job_id]["active"] -= 1
+            
             if os.path.exists(path):
                 try: os.remove(path)
                 except: pass
             task_queue.task_done()
-            # איסוף זבל ידני בסיום כל משימה לשמירה על RAM פנוי
             gc.collect()
 
 for i in range(MAX_WORKERS):
@@ -167,13 +163,19 @@ def process():
         return jsonify({"error": "No files"}), 400
 
     job_id = str(int(time.time() * 1000))
-    jobs[job_id] = {"total": len(files), "done": 0, "current": 0, "results": []}
+    # הוספת שדה active לאתחול ה-Job
+    jobs[job_id] = {
+        "total": len(files),
+        "done": 0,
+        "current": 0,
+        "active": 0,
+        "results": []
+    }
 
     for i, file in enumerate(files):
         if file.filename == '': continue
         path = os.path.join(UPLOAD_FOLDER, f"q_{job_id}_{i}.jpg")
         file.save(path)
-        
         task_queue.put({
             "job_id": job_id, "path": path, "index": i,
             "t1": text1_list[i] if i < len(text1_list) else "",
@@ -187,15 +189,17 @@ def process():
 def get_progress(job_id):
     job = jobs.get(job_id)
     if not job: return jsonify({"error": "Not found"}), 404
-    d, t, c = job["done"], job["total"], job["current"]
     return jsonify({
-        "progress": int((d/t)*100) if t > 0 else 0,
-        "done": d, "total": t, "current": c,
-        "finished": d >= t,
-        "results": job["results"] if d >= t else []
+        "progress": int((job["done"]/job["total"])*100) if job["total"] > 0 else 0,
+        "done": job["done"],
+        "total": job["total"],
+        "current": job["current"],
+        "active": job["active"], # החזרת המונה האקטיבי ל-Frontend
+        "finished": job["done"] >= job["total"],
+        "results": job["results"] if job["done"] >= job["total"] else []
     })
 
-# ---------------- UI (ללא שינוי) ----------------
+# ---------------- UI (מעודכן עם לוגיקת תצוגה חדשה) ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -262,7 +266,10 @@ async function sendToServer(rows){
     let interval = setInterval(async ()=>{
         let r = await fetch("/progress/" + jobId);
         let d = await r.json();
-        document.getElementById("loader").innerText = `⏳ מעבד: תמונה ${d.current} מתוך ${d.total} (${d.progress}%)`;
+        
+        // עדכון טקסט ההתקדמות החדש: מציג כמה הושלמו וכמה מעובדים כרגע
+        document.getElementById("loader").innerText = `⏳ הושלמו ${d.done} מתוך ${d.total} | מעבד כעת: ${d.active}`;
+        
         if(d.finished){
             clearInterval(interval);
             document.getElementById("loader").innerText = "✅ הושלם!";
