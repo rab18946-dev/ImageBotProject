@@ -2,6 +2,7 @@ import threading
 import queue
 import os
 import time
+import gc # הוספת ניקוי זיכרון ידני
 from flask import Flask, request, render_template_string, send_file, jsonify
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import arabic_reshaper
@@ -12,7 +13,7 @@ app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "output"
 LOGO_PATH = "logo.png"
-MAX_WORKERS = 2  # הגבלה ל-2 עובדים למניעת קריסת RAM (512MB)
+MAX_WORKERS = 2 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -22,13 +23,15 @@ jobs = {}
 
 def load_logo():
     try:
-        return Image.open(LOGO_PATH).convert("RGBA")
+        img = Image.open(LOGO_PATH).convert("RGBA")
+        img.load()
+        return img
     except:
         return Image.new("RGBA", (100, 100), (255, 255, 255, 0))
 
 LOGO_IMAGE = load_logo()
 
-# ---------------- IMAGE PROCESSING LOGIC ----------------
+# ---------------- IMAGE PROCESSING LOGIC (FIXED) ----------------
 def get_font(size):
     fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
     for f in fonts_to_try:
@@ -41,10 +44,13 @@ def rtl(text):
     except: return text
 
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
-    # פתיחת תמונה והקטנה מיידית לחסכון ב-RAM
+    print(f"START processing: {input_path}") # לוג התחלה
+    
+    # טעינה מלאה לזיכרון והקטנה ל-1500px
     with Image.open(input_path) as raw_img:
+        raw_img.load() # טעינה מלאה כפי שנדרש
         image = ImageOps.exif_transpose(raw_img).convert("RGBA")
-        image.thumbnail((2000, 2000), Image.LANCZOS) # הקטנה ל-2000px כפי שנדרש
+        image.thumbnail((1500, 1500), Image.LANCZOS) # הקטנה למניעת קריסה
     
     width, height = image.size
     is_portrait = height > width
@@ -61,6 +67,7 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     }
     pos = positions.get(logo_position, (margin, margin))
     image.paste(logo, pos, logo)
+    logo.close() # שחרור זיכרון לוגו זמני
 
     draw = ImageDraw.Draw(image)
     font_size = int(height * 0.042)
@@ -81,11 +88,12 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         box_w = max_text_width + 120
         x1, y1 = (width - box_w)//2, height - box_h - 40
 
-        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        d_overlay = ImageDraw.Draw(overlay)
-        d_overlay.rounded_rectangle([x1, y1, x1+box_w, y1+box_h], radius=12, fill=(255, 255, 255, 255))
-        image = Image.alpha_composite(image, overlay)
-        draw = ImageDraw.Draw(image)
+        # החלפת מנגנון ה-overlay במנגנון ה-rounded_rectangle הישיר
+        draw.rounded_rectangle(
+            [x1, y1, x1+box_w, y1+box_h],
+            radius=12,
+            fill=(255, 255, 255)
+        )
 
         curr_y = y1 + 10
         for d in line_data:
@@ -95,13 +103,20 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    image_to_save.save(out, "JPEG", quality=85, optimize=True) # quality 85 לחסכון נוסף
+    
+    # שמירה ללא optimize ובאיכות 80
+    image_to_save.save(out, "JPEG", quality=80) 
+    
+    # שחרור זיכרון אגרסיבי
+    image.close()
+    image_to_save.close()
+    
+    print(f"DONE processing: {input_path}") # לוג סיום
     return "/output/" + filename
 
-# ---------------- FIXED WORKER SYSTEM ----------------
+# ---------------- WORKER SYSTEM ----------------
 def image_worker(worker_id):
-    """Worker קבוע שמושך משימות מהתור"""
-    print(f"[Worker {worker_id}] Started and waiting for tasks...")
+    print(f"[Worker {worker_id}] Online")
     while True:
         task = task_queue.get()
         if task is None: break
@@ -110,19 +125,13 @@ def image_worker(worker_id):
         path = task['path']
         
         try:
-            print(f"[Worker {worker_id}] START processing {path}")
-            # עיבוד התמונה
             res_url = process_image(path, task['t1'], task['t2'], task['index'], task['pos'])
-            
-            # עדכון מילון ה-jobs בצורה בטוחה
             if job_id in jobs:
                 jobs[job_id]["results"].append(res_url)
                 jobs[job_id]["done"] += 1
                 jobs[job_id]["current"] += 1
-            print(f"[Worker {worker_id}] DONE processing {path}")
-            
         except Exception as e:
-            print(f"[Worker {worker_id}] ERROR processing {path}: {e}")
+            print(f"ERROR processing {path}: {e}")
             if job_id in jobs:
                 jobs[job_id]["done"] += 1
                 jobs[job_id]["current"] += 1
@@ -131,11 +140,11 @@ def image_worker(worker_id):
                 try: os.remove(path)
                 except: pass
             task_queue.task_done()
+            # איסוף זבל ידני בסיום כל משימה לשמירה על RAM פנוי
+            gc.collect()
 
-# אתחול ה-Workers פעם אחת בלבד בעת הרצת האפליקציה
 for i in range(MAX_WORKERS):
-    t = threading.Thread(target=image_worker, args=(i+1,), daemon=True)
-    t.start()
+    threading.Thread(target=image_worker, args=(i+1,), daemon=True).start()
 
 # ---------------- ROUTES ----------------
 @app.route("/")
@@ -165,14 +174,11 @@ def process():
         path = os.path.join(UPLOAD_FOLDER, f"q_{job_id}_{i}.jpg")
         file.save(path)
         
-        # הכנסת כל תמונה כמשימה נפרדת לתור
         task_queue.put({
-            "job_id": job_id,
-            "path": path,
+            "job_id": job_id, "path": path, "index": i,
             "t1": text1_list[i] if i < len(text1_list) else "",
             "t2": text2_list[i] if i < len(text2_list) else "",
-            "pos": logo_pos_list[i] if i < len(logo_pos_list) else "top_left",
-            "index": i
+            "pos": logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
         })
 
     return jsonify({"job_id": job_id})
@@ -181,19 +187,12 @@ def process():
 def get_progress(job_id):
     job = jobs.get(job_id)
     if not job: return jsonify({"error": "Not found"}), 404
-    
-    done = job["done"]
-    total = job["total"]
-    current = job["current"]
-    progress = int((done / total) * 100) if total > 0 else 0
-    
+    d, t, c = job["done"], job["total"], job["current"]
     return jsonify({
-        "progress": progress,
-        "done": done,
-        "total": total,
-        "current": current,
-        "finished": done >= total,
-        "results": job["results"] if done >= total else []
+        "progress": int((d/t)*100) if t > 0 else 0,
+        "done": d, "total": t, "current": c,
+        "finished": d >= t,
+        "results": job["results"] if d >= t else []
     })
 
 # ---------------- UI (ללא שינוי) ----------------
@@ -263,10 +262,7 @@ async function sendToServer(rows){
     let interval = setInterval(async ()=>{
         let r = await fetch("/progress/" + jobId);
         let d = await r.json();
-        
-        // הצגת התקדמות אמיתית: תמונה X מתוך Y
         document.getElementById("loader").innerText = `⏳ מעבד: תמונה ${d.current} מתוך ${d.total} (${d.progress}%)`;
-        
         if(d.finished){
             clearInterval(interval);
             document.getElementById("loader").innerText = "✅ הושלם!";
