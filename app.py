@@ -1,22 +1,18 @@
 import threading
 import queue
-from flask import Flask, request, render_template_string, send_file, jsonify
-from PIL import Image, ImageDraw, ImageFont, ImageOps
 import os
 import time
+from flask import Flask, request, render_template_string, send_file, jsonify
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import arabic_reshaper
 
 app = Flask(__name__)
 
-# --- קבועי הגבלה והגדרות תור ---
-MAX_FILES = 1000
-MAX_FILE_MB = 10
-MAX_TOTAL_MB = 500
-MAX_WORKERS = 2 
+# --- הגדרות מערכת ---
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "output"
 LOGO_PATH = "logo.png"
-
+MAX_WORKERS = 2  # הגבלה ל-2 עובדים למניעת קריסת RAM (512MB)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -32,7 +28,7 @@ def load_logo():
 
 LOGO_IMAGE = load_logo()
 
-# ---------------- IMAGE PROCESSING LOGIC (ללא שינוי) ----------------
+# ---------------- IMAGE PROCESSING LOGIC ----------------
 def get_font(size):
     fonts_to_try = ["Assistant-Bold.ttf", "Heebo-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"]
     for f in fonts_to_try:
@@ -45,9 +41,10 @@ def rtl(text):
     except: return text
 
 def process_image(input_path, text1, text2, index, logo_position="top_left"):
+    # פתיחת תמונה והקטנה מיידית לחסכון ב-RAM
     with Image.open(input_path) as raw_img:
         image = ImageOps.exif_transpose(raw_img).convert("RGBA")
-        image.thumbnail((2500, 2500), Image.LANCZOS)
+        image.thumbnail((2000, 2000), Image.LANCZOS) # הקטנה ל-2000px כפי שנדרש
     
     width, height = image.size
     is_portrait = height > width
@@ -70,45 +67,41 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     font = get_font(font_size)
 
     lines = [rtl(t) for t in [text1, text2] if t and t.strip()]
-    if not lines:
-        image_to_save = image.convert("RGB")
-        filename = f"result_{index}_{int(time.time())}.jpg"
-        out = os.path.join(OUTPUT_FOLDER, filename)
-        image_to_save.save(out, "JPEG", quality=90, optimize=True)
-        return "/output/" + filename
+    if lines:
+        line_data = []
+        max_text_width = 0
+        ascent, descent = font.getmetrics()
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            lw, lh = bbox[2]-bbox[0], ascent+descent
+            line_data.append({'line': line, 'width': lw, 'height': lh, 'offset_x': bbox[0]})
+            max_text_width = max(max_text_width, lw)
 
-    line_data = []
-    max_text_width = 0
-    ascent, descent = font.getmetrics()
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        lw, lh = bbox[2]-bbox[0], ascent+descent
-        line_data.append({'line': line, 'width': lw, 'height': lh, 'offset_x': bbox[0]})
-        max_text_width = max(max_text_width, lw)
+        box_h = sum(d['height'] for d in line_data) + (6 * (len(lines)-1)) + 20
+        box_w = max_text_width + 120
+        x1, y1 = (width - box_w)//2, height - box_h - 40
 
-    box_h = sum(d['height'] for d in line_data) + (6 * (len(lines)-1)) + 20
-    box_w = max_text_width + 120
-    x1, y1 = (width - box_w)//2, height - box_h - 40
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        d_overlay = ImageDraw.Draw(overlay)
+        d_overlay.rounded_rectangle([x1, y1, x1+box_w, y1+box_h], radius=12, fill=(255, 255, 255, 255))
+        image = Image.alpha_composite(image, overlay)
+        draw = ImageDraw.Draw(image)
 
-    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    d_overlay = ImageDraw.Draw(overlay)
-    d_overlay.rounded_rectangle([x1, y1, x1+box_w, y1+box_h], radius=12, fill=(255, 255, 255, 255))
-    image = Image.alpha_composite(image, overlay)
-    draw = ImageDraw.Draw(image)
-
-    curr_y = y1 + 10
-    for d in line_data:
-        draw.text(((width-d['width'])//2 - d['offset_x'], curr_y), d['line'], fill=(0,0,0,255), font=font)
-        curr_y += d['height'] + 6
+        curr_y = y1 + 10
+        for d in line_data:
+            draw.text(((width-d['width'])//2 - d['offset_x'], curr_y), d['line'], fill=(0,0,0,255), font=font)
+            curr_y += d['height'] + 6
 
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    image_to_save.save(out, "JPEG", quality=90, optimize=True)
+    image_to_save.save(out, "JPEG", quality=85, optimize=True) # quality 85 לחסכון נוסף
     return "/output/" + filename
 
-# ---------------- WORKER SYSTEM (עדכון tracking) ----------------
-def image_worker():
+# ---------------- FIXED WORKER SYSTEM ----------------
+def image_worker(worker_id):
+    """Worker קבוע שמושך משימות מהתור"""
+    print(f"[Worker {worker_id}] Started and waiting for tasks...")
     while True:
         task = task_queue.get()
         if task is None: break
@@ -117,22 +110,32 @@ def image_worker():
         path = task['path']
         
         try:
+            print(f"[Worker {worker_id}] START processing {path}")
+            # עיבוד התמונה
             res_url = process_image(path, task['t1'], task['t2'], task['index'], task['pos'])
-            jobs[job_id]["results"].append(res_url)
-            jobs[job_id]["done"] += 1
-        except Exception as e:
-            print(f"Worker Error: {e}")
-            jobs[job_id]["done"] += 1
-        finally:
-            # עדכון שדה ה-current בכל סיום תמונה (הצלחה או כישלון)
-            if job_id in jobs:
-                jobs[job_id]["current"] += 1
             
-            if os.path.exists(path): os.remove(path)
+            # עדכון מילון ה-jobs בצורה בטוחה
+            if job_id in jobs:
+                jobs[job_id]["results"].append(res_url)
+                jobs[job_id]["done"] += 1
+                jobs[job_id]["current"] += 1
+            print(f"[Worker {worker_id}] DONE processing {path}")
+            
+        except Exception as e:
+            print(f"[Worker {worker_id}] ERROR processing {path}: {e}")
+            if job_id in jobs:
+                jobs[job_id]["done"] += 1
+                jobs[job_id]["current"] += 1
+        finally:
+            if os.path.exists(path):
+                try: os.remove(path)
+                except: pass
             task_queue.task_done()
 
-for _ in range(MAX_WORKERS):
-    threading.Thread(target=image_worker, daemon=True).start()
+# אתחול ה-Workers פעם אחת בלבד בעת הרצת האפליקציה
+for i in range(MAX_WORKERS):
+    t = threading.Thread(target=image_worker, args=(i+1,), daemon=True)
+    t.start()
 
 # ---------------- ROUTES ----------------
 @app.route("/")
@@ -151,21 +154,25 @@ def process():
     text2_list = request.form.getlist("text2")
     logo_pos_list = request.form.getlist("logo_position")
 
-    if not files or files[0].filename == '': return jsonify({"error": "No files"}), 400
+    if not files or files[0].filename == '':
+        return jsonify({"error": "No files"}), 400
 
     job_id = str(int(time.time() * 1000))
-    # אתחול ה-Job עם שדה current חדש
     jobs[job_id] = {"total": len(files), "done": 0, "current": 0, "results": []}
 
     for i, file in enumerate(files):
         if file.filename == '': continue
         path = os.path.join(UPLOAD_FOLDER, f"q_{job_id}_{i}.jpg")
         file.save(path)
+        
+        # הכנסת כל תמונה כמשימה נפרדת לתור
         task_queue.put({
-            "job_id": job_id, "path": path, "index": i,
+            "job_id": job_id,
+            "path": path,
             "t1": text1_list[i] if i < len(text1_list) else "",
             "t2": text2_list[i] if i < len(text2_list) else "",
-            "pos": logo_pos_list[i] if i < len(logo_pos_list) else "top_left"
+            "pos": logo_pos_list[i] if i < len(logo_pos_list) else "top_left",
+            "index": i
         })
 
     return jsonify({"job_id": job_id})
@@ -174,17 +181,22 @@ def process():
 def get_progress(job_id):
     job = jobs.get(job_id)
     if not job: return jsonify({"error": "Not found"}), 404
-    d, t, c = job["done"], job["total"], job.get("current", job["done"])
+    
+    done = job["done"]
+    total = job["total"]
+    current = job["current"]
+    progress = int((done / total) * 100) if total > 0 else 0
+    
     return jsonify({
-        "progress": int((d/t)*100), 
-        "done": d, 
-        "total": t, 
-        "current": c, # הערך החדש עבור ה-Frontend
-        "finished": d==t, 
-        "results": job["results"] if d==t else []
+        "progress": progress,
+        "done": done,
+        "total": total,
+        "current": current,
+        "finished": done >= total,
+        "results": job["results"] if done >= total else []
     })
 
-# ---------------- UI (עם עדכון תצוגת התקדמות) ----------------
+# ---------------- UI (ללא שינוי) ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -229,13 +241,11 @@ function addRow(){
 async function sendToServer(rows){
     let formData = new FormData();
     let hasFiles = false;
-    let totalCount = 0;
     rows.forEach(row=>{
         const files = row.querySelector("input[type=file]").files;
         const inputs = row.querySelectorAll("input[type=text]");
         const pos = row.querySelector("select").value;
         for(let i=0; i<files.length; i++){
-            totalCount++;
             formData.append("images", files[i]);
             formData.append("text1", inputs[0].value);
             formData.append("text2", inputs[1].value);
@@ -245,7 +255,7 @@ async function sendToServer(rows){
     });
 
     if(!hasFiles) { alert("נא לבחור לפחות תמונה אחת"); return; }
-    document.getElementById("loader").innerText = "שולח נתונים...";
+    document.getElementById("loader").innerText = "שולח נתונים לתור...";
     let res = await fetch("/process", {method:"POST", body:formData});
     let data = await res.json();
     
@@ -254,7 +264,7 @@ async function sendToServer(rows){
         let r = await fetch("/progress/" + jobId);
         let d = await r.json();
         
-        // עדכון טקסט ההתקדמות החדש לפי הדרישה
+        // הצגת התקדמות אמיתית: תמונה X מתוך Y
         document.getElementById("loader").innerText = `⏳ מעבד: תמונה ${d.current} מתוך ${d.total} (${d.progress}%)`;
         
         if(d.finished){
