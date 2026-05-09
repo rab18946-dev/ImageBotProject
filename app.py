@@ -103,44 +103,73 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     print(f"DONE processing: {input_path}")
     return "/output/" + filename
 
-# ---------------- WORKER SYSTEM (WITH ACTIVE TRACKING) ----------------
+# ---------------- FIXED WORKER SYSTEM ----------------
 def image_worker(worker_id):
-    while True:
-        task = task_queue.get()
-        if task is None: break
-        
-        job_id = task['job_id']
-        path = task['path']
-        
-        try:
-            # עדכון שה-Worker התחיל לעבוד על המשימה
-            if job_id in jobs:
-                jobs[job_id]["active"] += 1
-            
-            res_url = process_image(path, task['t1'], task['t2'], task['index'], task['pos'])
-            
-            if job_id in jobs:
-                jobs[job_id]["results"].append(res_url)
-                jobs[job_id]["done"] += 1
-                jobs[job_id]["current"] += 1
-        except Exception as e:
-            print(f"ERROR processing {path}: {e}")
-            if job_id in jobs:
-                jobs[job_id]["done"] += 1
-                jobs[job_id]["current"] += 1
-        finally:
-            # הפחתת המונה האקטיבי בסיום (הצלחה או כישלון)
-            if job_id in jobs and jobs[job_id]["active"] > 0:
-                jobs[job_id]["active"] -= 1
-            
-            if os.path.exists(path):
-                try: os.remove(path)
-                except: pass
-            task_queue.task_done()
-            gc.collect()
+    print(f"[Worker {worker_id}] ONLINE")
 
+    while True:
+        try:
+            task = task_queue.get()
+            print(f"[Worker {worker_id}] GOT TASK")
+
+            if task is None:
+                break
+
+            job_id = task['job_id']
+            path = task['path']
+
+            try:
+                if job_id in jobs:
+                    jobs[job_id]["active"] += 1
+
+                res_url = process_image(
+                    path,
+                    task['t1'],
+                    task['t2'],
+                    task['index'],
+                    task['pos']
+                )
+
+                if job_id in jobs:
+                    jobs[job_id]["results"].append(res_url)
+                    jobs[job_id]["done"] += 1
+                    jobs[job_id]["current"] += 1
+
+            except Exception as e:
+                print(f"PROCESS ERROR: {e}")
+                if job_id in jobs:
+                    jobs[job_id]["done"] += 1
+                    jobs[job_id]["current"] += 1
+
+            finally:
+                if job_id in jobs and jobs[job_id]["active"] > 0:
+                    jobs[job_id]["active"] -= 1
+
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except:
+                        pass
+
+                task_queue.task_done()
+                gc.collect()
+
+        except Exception as worker_error:
+            print(f"WORKER CRASH: {worker_error}")
+            time.sleep(1)
+
+# אתחול ה-Workers עם מעקב ולוגים
+workers = []
 for i in range(MAX_WORKERS):
-    threading.Thread(target=image_worker, args=(i+1,), daemon=True).start()
+    t = threading.Thread(
+        target=image_worker,
+        args=(i+1,),
+        daemon=True
+    )
+    t.start()
+    workers.append(t)
+
+print(f"STARTED {MAX_WORKERS} WORKERS")
 
 # ---------------- ROUTES ----------------
 @app.route("/")
@@ -163,7 +192,6 @@ def process():
         return jsonify({"error": "No files"}), 400
 
     job_id = str(int(time.time() * 1000))
-    # הוספת שדה active לאתחול ה-Job
     jobs[job_id] = {
         "total": len(files),
         "done": 0,
@@ -189,17 +217,36 @@ def process():
 def get_progress(job_id):
     job = jobs.get(job_id)
     if not job: return jsonify({"error": "Not found"}), 404
+    
+    if job["done"] >= job["total"]:
+        finished_data = {
+            "progress": 100,
+            "done": job["done"],
+            "total": job["total"],
+            "current": job["current"],
+            "active": job["active"],
+            "finished": True,
+            "results": job["results"]
+        }
+
+        def cleanup():
+            time.sleep(30)
+            jobs.pop(job_id, None)
+
+        threading.Thread(target=cleanup, daemon=True).start()
+        return jsonify(finished_data)
+        
     return jsonify({
         "progress": int((job["done"]/job["total"])*100) if job["total"] > 0 else 0,
         "done": job["done"],
         "total": job["total"],
         "current": job["current"],
-        "active": job["active"], # החזרת המונה האקטיבי ל-Frontend
-        "finished": job["done"] >= job["total"],
-        "results": job["results"] if job["done"] >= job["total"] else []
+        "active": job["active"],
+        "finished": False,
+        "results": []
     })
 
-# ---------------- UI (מעודכן עם לוגיקת תצוגה חדשה) ----------------
+# ---------------- UI (ללא שינוי) ----------------
 HTML = """
 <!DOCTYPE html>
 <html lang="he">
@@ -265,9 +312,9 @@ async function sendToServer(rows){
     let jobId = data.job_id;
     let interval = setInterval(async ()=>{
         let r = await fetch("/progress/" + jobId);
+        if(r.status === 404) { clearInterval(interval); return; }
         let d = await r.json();
         
-        // עדכון טקסט ההתקדמות החדש: מציג כמה הושלמו וכמה מעובדים כרגע
         document.getElementById("loader").innerText = `⏳ הושלמו ${d.done} מתוך ${d.total} | מעבד כעת: ${d.active}`;
         
         if(d.finished){
