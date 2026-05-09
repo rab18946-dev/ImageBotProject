@@ -47,6 +47,9 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     with Image.open(input_path) as raw_img:
         image = ImageOps.exif_transpose(raw_img).convert("RGBA")
     
+    # 🔧 שינוי 1 – הקטנת תמונה ל-1200px לחיסכון בזיכרון ויציבות
+    image.thumbnail((1200, 1200), Image.LANCZOS)
+    
     width, height = image.size
     is_portrait = height > width
 
@@ -80,7 +83,8 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
         image_to_save = image.convert("RGB")
         filename = f"result_{index}_{int(time.time())}.jpg"
         out = os.path.join(OUTPUT_FOLDER, filename)
-        image_to_save.save(out, "JPEG", quality=95, optimize=True)
+        # 🔧 שינוי 2 – ייצוא אופטימלי למייל
+        image_to_save.save(out, "JPEG", quality=78, optimize=True, progressive=True)
         return "/output/" + filename
 
     line_data = []
@@ -117,7 +121,9 @@ def process_image(input_path, text1, text2, index, logo_position="top_left"):
     image_to_save = image.convert("RGB")
     filename = f"result_{index}_{int(time.time())}.jpg"
     out = os.path.join(OUTPUT_FOLDER, filename)
-    image_to_save.save(out, "JPEG", quality=95, optimize=True)
+    
+    # 🔧 שינוי 2 – ייצוא אופטימלי למייל: איכות 78 ו-Progressive
+    image_to_save.save(out, "JPEG", quality=78, optimize=True, progressive=True)
     return "/output/" + filename
 
 # ---------------- BACKGROUND WORKER ----------------
@@ -134,7 +140,7 @@ def background_worker(job_id, saved_paths, text1_list, text2_list, logo_pos_list
             jobs[job_id]["done"] += 1
         except Exception as e:
             print(f"Error processing {path}: {e}")
-            jobs[job_id]["done"] += 1 # עדכון מונה גם בשגיאה למניעת תקיעה
+            jobs[job_id]["done"] += 1 
         finally:
             if os.path.exists(path): os.remove(path)
 
