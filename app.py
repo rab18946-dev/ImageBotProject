@@ -268,6 +268,21 @@ select { padding: 8px; border-radius: 10px; border: 1px solid #e8d9a8; backgroun
     <button class="refresh-btn" onclick="location.reload()">רענן</button>
 </div>
 <div id="rows"></div>
+
+<div style="margin-top:40px; padding:20px; background:white; border-radius:16px;">
+    <h3>הוספת לוגו לסרטון</h3>
+
+    <input type="file" id="videoFile" accept="video/mp4">
+
+    <br><br>
+
+    <button class="main-btn" onclick="processVideo()">
+        צור סרטון עם לוגו
+    </button>
+
+    <div id="videoResult"></div>
+</div>
+
 <button class="add-btn" onclick="addRow()">+ הוסף שורה</button>
 <div id="loader"></div>
 <div id="gallery"></div>
@@ -323,9 +338,44 @@ async function sendToServer(rows){
             d.results.forEach(img=>{
                 g.innerHTML += `<div><img src="${img}"><a href="${img}" download style="text-decoration:none; color:#b8962e; font-weight:bold; display:block; margin-top:8px;">⬇️ הורד</a></div>`;
             });
-        }
+            }
     }, 800);
 }
+
+async function processVideo(){
+    const fileInput = document.getElementById("videoFile");
+    const result = document.getElementById("videoResult");
+
+    if(!fileInput.files.length){
+        alert("נא לבחור סרטון");
+        return;
+    }
+
+    let formData = new FormData();
+    formData.append("video", fileInput.files[0]);
+
+    result.innerText = "⏳ מעבד סרטון...";
+
+    let res = await fetch("/process_video", {
+        method:"POST",
+        body:formData
+    });
+
+    let data = await res.json();
+
+    if(data.file){
+        result.innerHTML = `
+            ✅ הסרטון מוכן:
+            <br>
+            <a href="${data.file}" download>
+            ⬇️ הורד סרטון
+            </a>
+        `;
+    } else {
+        result.innerText = "שגיאה: " + data.error;
+    }
+}
+
 function processAll(){ sendToServer(document.querySelectorAll(".row")); }
 window.onload = addRow;
 </script>
