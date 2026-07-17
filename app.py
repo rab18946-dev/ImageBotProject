@@ -5,6 +5,8 @@ import os
 import time
 import arabic_reshaper
 
+from video_processor import add_logo_to_video
+
 app = Flask(__name__)
 
 # הגדרות נתיבים
