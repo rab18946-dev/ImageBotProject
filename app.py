@@ -155,6 +155,38 @@ def home():
 def logo():
     return send_file(LOGO_PATH)
 
+@app.route("/process_video", methods=["POST"])
+def process_video():
+    video = request.files.get("video")
+
+    if not video:
+        return jsonify({"error": "No video"}), 400
+
+    video_path = os.path.join(UPLOAD_FOLDER, video.filename)
+    output_path = os.path.join(
+        OUTPUT_FOLDER,
+        "video_with_logo.mp4"
+    )
+
+    video.save(video_path)
+
+    try:
+        add_logo_to_video(
+            video_path,
+            LOGO_PATH,
+            output_path
+        )
+
+        return jsonify({
+            "success": True,
+            "file": "/output/video_with_logo.mp4"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 500
+
 @app.route("/output/<filename>")
 def serve_output(filename):
     return send_file(os.path.join(OUTPUT_FOLDER, filename))
