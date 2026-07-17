@@ -1,22 +1,30 @@
-import os
 import subprocess
 
 
-def add_logo_to_video(video_path, logo_path, output_path):
-    """
-    מוסיף לוגו לסרטון בפינה הימנית התחתונה
-    """
+def add_logo_to_video(video_path, logo_path, output_path, position="bottom_right"):
+
+    positions = {
+        "top_left": "20:20",
+        "top_right": "W-w-20:20",
+        "bottom_left": "20:H-h-20",
+        "bottom_right": "W-w-20:H-h-20"
+    }
+
+    overlay_position = positions.get(
+        position,
+        "W-w-20:H-h-20"
+    )
 
     command = [
         "ffmpeg",
         "-i", video_path,
         "-i", logo_path,
         "-filter_complex",
-        "[1:v]scale=150:-1[logo];[0:v][logo]overlay=W-w-20:H-h-20",
-        "-codec:a",
+        f"[1:v]scale=150:-1[logo];[0:v][logo]overlay={overlay_position}",
+        "-c:a",
         "copy",
-        output_path,
-        "-y"
+        "-y",
+        output_path
     ]
 
     subprocess.run(
